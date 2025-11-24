@@ -1,0 +1,86 @@
+<view class="container">
+  <!-- 状态栏 -->
+  <view class="status-bar">
+    <text class="status-text">模式: {{serverStatus.mode || '未知'}}</text>
+    <text class="status-text">AI: {{serverStatus.ai_enabled ? '启用' : '模拟'}}</text>
+    <text class="update-time">更新: {{lastUpdated}}</text>
+  </view>
+
+  <!-- 每日总结卡片 -->
+  <view class="summary-card">
+    <view class="card-header">
+      <text class="card-title">🤖 AI每日小结</text>
+      <text class="refresh-icon" bindtap="refreshAll">🔄</text>
+    </view>
+    <scroll-view class="summary-content" scroll-y>
+      <text class="summary-text">{{summary}}</text>
+    </scroll-view>
+  </view>
+
+  <!-- 事件列表 -->
+  <view class="section-title">
+    <text>📅 今日重要事件 ({{events.length}})</text>
+  </view>
+
+  <scroll-view class="event-list" scroll-y refresher-enabled="{{true}}" bindrefresherrefresh="onRefresh" refresher-triggered="{{isRefreshing}}">
+    <view class="event-item" wx:for="{{events}}" wx:key="id" bindtap="goToDetail" data-event="{{item}}">
+      <!-- 事件头部 -->
+      <view class="event-header">
+        <view class="time-country">
+          <text class="time">{{item.time}}</text>
+          <text class="country">{{item.country}}</text>
+        </view>
+        <view class="importance-badge">
+          <text class="badge-text" wx:if="{{item.importance >= 3}}">高</text>
+          <text class="badge-text" wx:elif="{{item.importance >= 2}}">中</text>
+          <text class="badge-text" wx:else>低</text>
+        </view>
+      </view>
+
+      <!-- 事件名称 -->
+      <text class="event-name">{{item.name}}</text>
+
+      <!-- 数据对比 -->
+      <view class="data-row">
+        <view class="data-item">
+          <text class="data-label">预期</text>
+          <text class="data-value forecast">{{item.forecast || '-'}}</text>
+        </view>
+        <view class="data-item">
+          <text class="data-label">前值</text>
+          <text class="data-value previous">{{item.previous || '-'}}</text>
+        </view>
+        <view class="data-item" wx:if="{{item.actual}}">
+          <text class="data-label">实际</text>
+          <text class="data-value actual">{{item.actual}}</text>
+        </view>
+      </view>
+
+      <!-- AI分析预览 -->
+      <view class="ai-section">
+        <text class="ai-label">🤖 AI分析</text>
+        <text class="ai-preview">{{item.ai_analysis}}</text>
+      </view>
+
+      <!-- 货币标签 -->
+      <view class="currency-tag">
+        <text>💱 {{item.currency}}</text>
+      </view>
+    </view>
+
+    <!-- 空状态 -->
+    <view wx:if="{{events.length === 0}}" class="empty-state">
+      <text class="empty-icon">📊</text>
+      <text class="empty-text">暂无事件数据</text>
+      <button class="retry-btn" bindtap="loadData">重新加载</button>
+    </view>
+  </scroll-view>
+
+  <!-- 加载提示 -->
+  <view wx:if="{{loading}}" class="loading-overlay">
+    <view class="loading-content">
+      <text class="loading-icon">⏳</text>
+      <text>正在加载数据...</text>
+    </view>
+  </view>
+</view>

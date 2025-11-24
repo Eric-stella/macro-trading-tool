@@ -1,0 +1,273 @@
+/* 全局样式 */
+.container {
+  padding: 20rpx;
+  background: #f5f5f5;
+  min-height: 100vh;
+}
+
+/* 状态栏 */
+.status-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10rpx 20rpx;
+  background: #e8f4f8;
+  border-radius: 8rpx;
+  margin-bottom: 20rpx;
+  font-size: 24rpx;
+  color: #666;
+}
+
+.update-time {
+  color: #999;
+}
+
+/* 总结卡片 */
+.summary-card {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  padding: 30rpx;
+  border-radius: 16rpx;
+  margin-bottom: 30rpx;
+  box-shadow: 0 4rpx 12rpx rgba(0,0,0,0.1);
+}
+
+.card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 20rpx;
+}
+
+.card-title {
+  color: white;
+  font-size: 32rpx;
+  font-weight: bold;
+}
+
+.refresh-icon {
+  color: white;
+  font-size: 36rpx;
+  padding: 10rpx;
+}
+
+.summary-content {
+  max-height: 200rpx;
+}
+
+.summary-text {
+  color: rgba(255,255,255,0.95);
+  font-size: 26rpx;
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+
+/* 区块标题 */
+.section-title {
+  font-size: 32rpx;
+  font-weight: bold;
+  color: #333;
+  margin: 30rpx 0 20rpx;
+  padding-left: 10rpx;
+  border-left: 6rpx solid #2c3e50;
+}
+
+/* 事件列表 */
+.event-list {
+  max-height: calc(100vh - 500rpx);
+}
+
+.event-item {
+  background: #fff;
+  padding: 30rpx;
+  border-radius: 16rpx;
+  margin-bottom: 20rpx;
+  box-shadow: 0 2rpx 8rpx rgba(0,0,0,0.08);
+  transition: transform 0.2s;
+}
+
+.event-item:active {
+  transform: scale(0.98);
+}
+
+.event-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 15rpx;
+}
+
+.time-country {
+  display: flex;
+  gap: 20rpx;
+}
+
+.time {
+  font-size: 32rpx;
+  font-weight: bold;
+  color: #e74c3c;
+}
+
+.country {
+  font-size: 28rpx;
+  color: #3498db;
+  font-weight: 500;
+}
+
+.importance-badge {
+  background: #e74c3c;
+  padding: 4rpx 16rpx;
+  border-radius: 20rpx;
+}
+
+.importance-badge text {
+  color: white;
+  font-size: 22rpx;
+  font-weight: bold;
+}
+
+.event-name {
+  display: block;
+  font-size: 32rpx;
+  font-weight: 600;
+  color: #2c3e50;
+  margin-bottom: 20rpx;
+  line-height: 1.4;
+}
+
+/* 数据对比 */
+.data-row {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 25rpx;
+  padding-bottom: 15rpx;
+  border-bottom: 1rpx solid #eee;
+}
+
+.data-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.data-label {
+  font-size: 24rpx;
+  color: #999;
+  margin-bottom: 8rpx;
+}
+
+.data-value {
+  font-size: 28rpx;
+  font-weight: 600;
+}
+
+.forecast {
+  color: #f39c12;
+}
+
+.previous {
+  color: #95a5a6;
+}
+
+.actual {
+  color: #27ae60;
+}
+
+/* AI分析 */
+.ai-section {
+  background: #f8f9fa;
+  padding: 20rpx;
+  border-radius: 12rpx;
+  margin-bottom: 20rpx;
+}
+
+.ai-label {
+  display: block;
+  font-size: 24rpx;
+  color: #666;
+  margin-bottom: 10rpx;
+}
+
+.ai-preview {
+  font-size: 26rpx;
+  color: #555;
+  line-height: 1.5;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+}
+
+/* 货币标签 */
+.currency-tag {
+  background: #e8f4f8;
+  padding: 8rpx 20rpx;
+  border-radius: 20rpx;
+  align-self: flex-start;
+}
+
+.currency-tag text {
+  font-size: 24rpx;
+  color: #2c3e50;
+  font-weight: 500;
+}
+
+/* 空状态 */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 100rpx 40rpx;
+}
+
+.empty-icon {
+  font-size: 80rpx;
+  margin-bottom: 20rpx;
+}
+
+.empty-text {
+  font-size: 28rpx;
+  color: #999;
+  margin-bottom: 40rpx;
+}
+
+.retry-btn {
+  background: #2c3e50;
+  color: white;
+  padding: 20rpx 40rpx;
+  border-radius: 8rpx;
+  font-size: 28rpx;
+}
+
+/* 加载提示 */
+.loading-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0,0,0,0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.loading-content {
+  background: white;
+  padding: 40rpx 60rpx;
+  border-radius: 16rpx;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.loading-icon {
+  font-size: 60rpx;
+  margin-bottom: 20rpx;
+  animation: spin 2s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}

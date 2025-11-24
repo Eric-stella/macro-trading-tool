@@ -1,0 +1,7 @@
+{
+  "desc": "放开所有页面索引",
+  "rules": [{
+    "action": "allow",
+    "page": "*"
+  }]
+}
