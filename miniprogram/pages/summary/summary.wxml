@@ -1,0 +1,109 @@
+<!-- pages/summary/summary.wxml -->
+
+<!-- 加载状态 -->
+<view wx:if="{{isLoading}}" class="loading-container">
+  <view class="loading-spinner">
+    <text class="loading-icon">🤖</text>
+    <text class="loading-text">AI正在生成今日总结...</text>
+  </view>
+</view>
+
+<!-- 主内容 -->
+<view wx:if="{{!isLoading}}" class="container fade-in">
+  
+  <!-- 头部 -->
+  <view class="summary-header">
+    <view class="header-main">
+      <text class="title">🤖 AI每日市场总结</text>
+      <text class="subtitle">
+        生成时间: {{serverInfo.lastUpdated ? formatTime(serverInfo.lastUpdated) : '--'}}
+      </text>
+    </view>
+    
+    <view class="header-actions">
+      <button class="btn-icon" bindtap="copySummary">
+        <text class="icon-copy">📋</text>
+      </button>
+      <button 
+        class="btn-refresh {{isRefreshing ? 'refreshing' : ''}}"
+        bindtap="refreshData"
+        disabled="{{isRefreshing}}"
+      >
+        {{isRefreshing ? '刷新中' : '刷新'}}
+      </button>
+    </view>
+  </view>
+
+  <!-- 统计卡片 -->
+  <view class="stats-cards">
+    <view class="stat-card">
+      <text class="stat-icon">📊</text>
+      <text class="stat-label">总事件数</text>
+      <text class="stat-value">{{analysisStats.totalEvents}}</text>
+    </view>
+    
+    <view class="stat-card">
+      <text class="stat-icon">🔥</text>
+      <text class="stat-label">高影响事件</text>
+      <text class="stat-value">{{analysisStats.highImpact}}</text>
+    </view>
+    
+    <view class="stat-card">
+      <text class="stat-icon">📈</text>
+      <text class="stat-label">市场情绪</text>
+      <text class="stat-value {{analysisStats.marketSentiment === '高波动' ? 'text-danger' : 
+                              analysisStats.marketSentiment === '平静' ? 'text-success' : 'text-warning'}}">
+        {{analysisStats.marketSentiment}}
+      </text>
+    </view>
+  </view>
+
+  <!-- AI总结内容 -->
+  <view class="summary-content card">
+    <view wx:if="{{loadError}}" class="error-notice">
+      <text class="error-icon">⚠️</text>
+      <text class="error-text">数据加载异常，显示模拟数据</text>
+    </view>
+    
+    <view wx:for="{{formattedSummary}}" wx:key="index" class="summary-section">
+      
+      <!-- 章节标题 -->
+      <view 
+        wx:if="{{item.type === 'title'}}" 
+        class="section-title {{expandedSections[getSectionKey(item.content)] ? 'expanded' : ''}}"
+        data-section="{{getSectionKey(item.content)}}"
+        bindtap="toggleSection"
+      >
+        <text class="section-icon">{{item.icon}}</text>
+        <text class="section-text">{{item.content}}</text>
+        <text class="section-toggle">
+          {{expandedSections[getSectionKey(item.content)] ? '▼' : '▶'}}
+        </text>
+      </view>
+      
+      <!-- 章节内容 -->
+      <view 
+        wx:if="{{item.type !== 'title' && expandedSections[getParentSection(index)]}}"
+        class="section-content {{item.type}}"
+      >
+        <text class="content-text">{{item.content}}</text>
+      </view>
+      
+    </view>
+  </view>
+
+  <!-- AI状态提示 -->
+  <view class="ai-status">
+    <text class="status-icon">{{serverInfo.aiEnabled ? '✅' : '🔧'}}</text>
+    <text class="status-text">
+      {{serverInfo.aiEnabled ? '实时AI分析' : '模拟分析模式'}}
+    </text>
+  </view>
+
+  <!-- 操作提示 -->
+  <view class="tips">
+    <text class="tip-item">💡 点击章节标题展开/收起内容</text>
+    <text class="tip-item">📋 点击复制图标复制完整总结</text>
+    <text class="tip-item">🔄 下拉页面或点击刷新按钮更新数据</text>
+  </view>
+</view>

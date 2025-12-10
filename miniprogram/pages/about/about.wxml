@@ -1,5 +1,0 @@
-<view class="container">
-  <text class="title">宏观日历AI助手</text>
-  <text class="desc">• 查询全球重要经济事件\n• AI生成市场影响分析\n• 数据仅供学习研究，不构成投资建议</text>
-  <text class="ver">版本 1.0.0</text>
-</view>

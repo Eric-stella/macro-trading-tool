@@ -1,0 +1,253 @@
+/* pages/summary/summary.wxss */
+
+/* 头部 */
+.summary-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 20px;
+  padding: 0 5px;
+}
+
+.header-main {
+  flex: 1;
+}
+
+.title {
+  display: block;
+  font-size: 20px;
+  font-weight: 600;
+  color: #1a237e;
+  margin-bottom: 5px;
+}
+
+.subtitle {
+  font-size: 12px;
+  color: #666;
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.btn-icon {
+  background: none;
+  border: none;
+  font-size: 20px;
+  padding: 5px;
+  min-width: auto;
+  line-height: 1;
+}
+
+.btn-icon::after {
+  border: none;
+}
+
+.btn-refresh {
+  background: linear-gradient(135deg, #1a237e, #283593);
+  color: white;
+  border: none;
+  border-radius: 15px;
+  padding: 6px 15px;
+  font-size: 12px;
+}
+
+/* 统计卡片 */
+.stats-cards {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+  margin-bottom: 20px;
+}
+
+.stat-card {
+  background: white;
+  border-radius: 10px;
+  padding: 15px 10px;
+  text-align: center;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+}
+
+.stat-icon {
+  font-size: 24px;
+  display: block;
+  margin-bottom: 8px;
+}
+
+.stat-label {
+  display: block;
+  font-size: 11px;
+  color: #999;
+  margin-bottom: 5px;
+}
+
+.stat-value {
+  display: block;
+  font-size: 18px;
+  font-weight: 600;
+  color: #1a237e;
+}
+
+/* 总结内容 */
+.summary-content {
+  margin-bottom: 20px;
+}
+
+.error-notice {
+  background: #fff2e8;
+  border-left: 4px solid #fa8c16;
+  padding: 10px 15px;
+  margin-bottom: 15px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.error-icon {
+  font-size: 16px;
+}
+
+.error-text {
+  font-size: 13px;
+  color: #fa8c16;
+}
+
+/* 章节标题 */
+.section-title {
+  display: flex;
+  align-items: center;
+  padding: 15px;
+  background: #f8f9fa;
+  border-radius: 8px;
+  margin-bottom: 10px;
+  cursor: pointer;
+  transition: all 0.3s ease;
+}
+
+.section-title.expanded {
+  background: #e8eaf6;
+  border-left: 4px solid #1a237e;
+}
+
+.section-icon {
+  font-size: 20px;
+  margin-right: 10px;
+}
+
+.section-text {
+  flex: 1;
+  font-size: 16px;
+  font-weight: 500;
+  color: #1a237e;
+}
+
+.section-toggle {
+  font-size: 12px;
+  color: #666;
+}
+
+/* 章节内容 */
+.section-content {
+  margin-left: 45px;
+  margin-bottom: 15px;
+  animation: fadeIn 0.3s ease;
+}
+
+.section-content.paragraph {
+  font-size: 14px;
+  line-height: 1.6;
+  color: #444;
+  padding: 5px 0;
+}
+
+.section-content.list {
+  font-size: 14px;
+  line-height: 1.6;
+  color: #555;
+  padding: 3px 0;
+  position: relative;
+  padding-left: 15px;
+}
+
+.section-content.list::before {
+  content: "•";
+  position: absolute;
+  left: 0;
+  color: #1a237e;
+}
+
+/* AI状态 */
+.ai-status {
+  text-align: center;
+  padding: 12px;
+  background: #f6ffed;
+  border-radius: 10px;
+  margin-bottom: 15px;
+  border: 1px solid #b7eb8f;
+}
+
+.status-icon {
+  font-size: 18px;
+  margin-right: 8px;
+}
+
+.status-text {
+  font-size: 13px;
+  color: #52c41a;
+  font-weight: 500;
+}
+
+/* 操作提示 */
+.tips {
+  background: #f0f7ff;
+  border-radius: 10px;
+  padding: 15px;
+  border: 1px solid #91d5ff;
+}
+
+.tip-item {
+  display: block;
+  font-size: 12px;
+  color: #1890ff;
+  margin-bottom: 8px;
+  padding-left: 20px;
+  position: relative;
+}
+
+.tip-item::before {
+  content: "💡";
+  position: absolute;
+  left: 0;
+}
+
+/* 加载状态 */
+.loading-container {
+  padding: 60px 20px;
+  text-align: center;
+}
+
+.loading-spinner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 15px;
+}
+
+.loading-icon {
+  font-size: 40px;
+  animation: pulse 1.5s infinite;
+}
+
+.loading-text {
+  font-size: 14px;
+  color: #666;
+}
+
+/* 动画 */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(-5px); }
+  to { opacity: 1; transform: translateY(0); }
+}

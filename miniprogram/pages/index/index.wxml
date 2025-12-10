@@ -1,86 +1,230 @@
-<view class="container">
-  <!-- 状态栏 -->
-  <view class="status-bar">
-    <text class="status-text">模式: {{serverStatus.mode || '未知'}}</text>
-    <text class="status-text">AI: {{serverStatus.ai_enabled ? '启用' : '模拟'}}</text>
-    <text class="update-time">更新: {{lastUpdated}}</text>
+<!-- pages/index/index.wxml -->
+
+<!-- 顶部状态栏 -->
+<view class="status-bar">
+  <view class="status-info">
+    <text>🕐 {{currentTime}}</text>
+    <text class="status-mode" wx:if="{{serverInfo.mode}}">
+      {{serverInfo.mode === 'production' ? '正式' : '模拟'}}模式
+    </text>
+  </view>
+</view>
+
+<!-- 加载状态 -->
+<view wx:if="{{isLoading && !filteredEvents.length}}" class="loading-container">
+  <view class="loading-spinner">
+    <text class="loading-icon">⏳</text>
+    <text class="loading-text">正在加载宏观事件数据...</text>
+  </view>
+</view>
+
+<!-- 错误状态 -->
+<view wx:if="{{loadError && !filteredEvents.length}}" class="error-container">
+  <text class="error-icon">❌</text>
+  <text class="error-text">数据加载失败</text>
+  <button class="btn btn-primary mt-20" bindtap="loadInitialData">
+    重新加载
+  </button>
+</view>
+
+<!-- 主内容区域 -->
+<view wx:if="{{!isLoading || filteredEvents.length > 0}}" class="container fade-in">
+  
+  <!-- 头部操作栏 -->
+  <view class="header">
+    <view class="header-title">
+      <text class="title">📅 今日宏观事件</text>
+      <text class="subtitle" wx:if="{{serverInfo.lastUpdated}}">
+        更新于 {{formatTime(serverInfo.lastUpdated, 'HH:mm')}}
+      </text>
+    </view>
+    
+    <view class="header-actions">
+      <button class="btn-icon" bindtap="onToggleFilters">
+        <text class="icon-filter">🔍</text>
+      </button>
+      <button 
+        class="btn-refresh {{isRefreshing ? 'refreshing' : ''}}" 
+        bindtap="onRefreshTap"
+        disabled="{{isRefreshing}}"
+      >
+        {{isRefreshing ? '刷新中...' : '刷新'}}
+      </button>
+    </view>
   </view>
 
-  <!-- 每日总结卡片 -->
-  <view class="summary-card">
-    <view class="card-header">
-      <text class="card-title">🤖 AI每日小结</text>
-      <text class="refresh-icon" bindtap="refreshAll">🔄</text>
+  <!-- 筛选器面板 -->
+  <view wx:if="{{showFilters}}" class="filter-panel card">
+    <view class="filter-section">
+      <text class="filter-label">重要性筛选:</text>
+      <view class="filter-options">
+        <view 
+          wx:for="{{filterOptions.importance}}" 
+          wx:key="value"
+          class="filter-option {{filters.importance === item.value ? 'active' : ''}}"
+          data-type="importance"
+          data-value="{{item.value}}"
+          bindtap="onFilterChange"
+        >
+          {{item.label}}
+        </view>
+      </view>
     </view>
-    <scroll-view class="summary-content" scroll-y>
-      <text class="summary-text">{{summary}}</text>
-    </scroll-view>
+    
+    <view class="filter-section">
+      <text class="filter-label">货币筛选:</text>
+      <view class="filter-options">
+        <view 
+          wx:for="{{filterOptions.currency}}" 
+          wx:key="value"
+          class="filter-option {{filters.currency === item.value ? 'active' : ''}}"
+          data-type="currency"
+          data-value="{{item.value}}"
+          bindtap="onFilterChange"
+        >
+          {{item.label}}
+        </view>
+      </view>
+    </view>
+    
+    <view class="filter-section">
+      <text class="filter-label">排序方式:</text>
+      <view class="sort-options">
+        <view 
+          class="sort-option {{sortBy === 'time' ? 'active' : ''}}"
+          data-sort="time"
+          bindtap="onSortChange"
+        >
+          🕐 按时间
+        </view>
+        <view 
+          class="sort-option {{sortBy === 'importance' ? 'active' : ''}}"
+          data-sort="importance"
+          bindtap="onSortChange"
+        >
+          🔥 按重要性
+        </view>
+      </view>
+    </view>
+    
+    <view class="filter-actions">
+      <button class="btn btn-secondary" bindtap="onResetFilters">
+        重置筛选
+      </button>
+    </view>
+  </view>
+
+  <!-- 事件统计 -->
+  <view class="stats-bar">
+    <view class="stat-item">
+      <text class="stat-label">事件总数:</text>
+      <text class="stat-value">{{serverInfo.eventsCount || 0}}</text>
+    </view>
+    <view class="stat-item">
+      <text class="stat-label">筛选后:</text>
+      <text class="stat-value">{{filteredEvents.length}}</text>
+    </view>
+    <view class="stat-item">
+      <text class="stat-label">AI分析:</text>
+      <text class="stat-value {{serverInfo.aiEnabled ? 'text-success' : 'text-warning'}}">
+        {{serverInfo.aiEnabled ? '已启用' : '模拟中'}}
+      </text>
+    </view>
   </view>
 
   <!-- 事件列表 -->
-  <view class="section-title">
-    <text>📅 今日重要事件 ({{events.length}})</text>
+  <view class="events-list">
+    <view 
+      wx:for="{{filteredEvents}}" 
+      wx:key="id"
+      class="event-item card {{item.importanceClass}}"
+    >
+      <!-- 事件头部 -->
+      <view class="event-header" bindtap="onToggleExpand" data-index="{{index}}">
+        <view class="event-time-info">
+          <text class="event-time">{{item.displayTime}}</text>
+          <text class="event-flag">{{item.flag}}</text>
+          <text class="event-country">{{item.country}}</text>
+        </view>
+        
+        <view class="event-importance">
+          <text class="importance-icon">{{item.importanceIcon}}</text>
+          <text class="importance-text {{item.importanceClass}}">
+            {{item.importanceText}}
+          </text>
+        </view>
+      </view>
+
+      <!-- 事件主要内容 -->
+      <view class="event-content">
+        <view class="event-name">{{item.name}}</view>
+        
+        <view class="event-data-grid">
+          <view class="data-item">
+            <text class="data-label">预期:</text>
+            <text class="data-value">{{item.forecast}}</text>
+          </view>
+          <view class="data-item">
+            <text class="data-label">前值:</text>
+            <text class="data-value">{{item.previous}}</text>
+          </view>
+          <view class="data-item" wx:if="{{item.hasActual}}">
+            <text class="data-label">实际:</text>
+            <text class="data-value {{item.actualClass}}">{{item.actual}}</text>
+          </view>
+          <view class="data-item">
+            <text class="data-label">货币:</text>
+            <text class="data-value">{{item.currency}}</text>
+          </view>
+        </view>
+      </view>
+
+      <!-- AI分析区域 -->
+      <view wx:if="{{item.ai_analysis}}" class="ai-analysis-section">
+        <view class="ai-header" bindtap="onToggleExpand" data-index="{{index}}">
+          <text class="ai-icon">🤖</text>
+          <text class="ai-title">AI分析</text>
+          <text class="ai-toggle">{{item.isExpanded ? '收起' : '展开'}}</text>
+        </view>
+        
+        <view 
+          class="ai-content {{item.isExpanded ? 'expanded' : 'collapsed'}}"
+          animation="{{item.animationData}}"
+        >
+          <text class="ai-text">{{item.ai_analysis}}</text>
+        </view>
+      </view>
+
+      <!-- 底部操作 -->
+      <view class="event-footer">
+        <view class="event-actions">
+          <button class="btn-action" size="mini" data-event="{{item}}">
+            📝 记笔记
+          </button>
+          <button class="btn-action" size="mini" data-event="{{item}}">
+            🔔 设提醒
+          </button>
+        </view>
+      </view>
+    </view>
   </view>
 
-  <scroll-view class="event-list" scroll-y refresher-enabled="{{true}}" bindrefresherrefresh="onRefresh" refresher-triggered="{{isRefreshing}}">
-    <view class="event-item" wx:for="{{events}}" wx:key="id" bindtap="goToDetail" data-event="{{item}}">
-      <!-- 事件头部 -->
-      <view class="event-header">
-        <view class="time-country">
-          <text class="time">{{item.time}}</text>
-          <text class="country">{{item.country}}</text>
-        </view>
-        <view class="importance-badge">
-          <text class="badge-text" wx:if="{{item.importance >= 3}}">高</text>
-          <text class="badge-text" wx:elif="{{item.importance >= 2}}">中</text>
-          <text class="badge-text" wx:else>低</text>
-        </view>
-      </view>
+  <!-- 空状态 -->
+  <view wx:if="{{!isLoading && filteredEvents.length === 0}}" class="empty-state">
+    <text class="empty-icon">📭</text>
+    <text class="empty-text">暂无符合筛选条件的事件</text>
+    <button class="btn btn-primary mt-20" bindtap="onResetFilters">
+      显示全部事件
+    </button>
+  </view>
 
-      <!-- 事件名称 -->
-      <text class="event-name">{{item.name}}</text>
-
-      <!-- 数据对比 -->
-      <view class="data-row">
-        <view class="data-item">
-          <text class="data-label">预期</text>
-          <text class="data-value forecast">{{item.forecast || '-'}}</text>
-        </view>
-        <view class="data-item">
-          <text class="data-label">前值</text>
-          <text class="data-value previous">{{item.previous || '-'}}</text>
-        </view>
-        <view class="data-item" wx:if="{{item.actual}}">
-          <text class="data-label">实际</text>
-          <text class="data-value actual">{{item.actual}}</text>
-        </view>
-      </view>
-
-      <!-- AI分析预览 -->
-      <view class="ai-section">
-        <text class="ai-label">🤖 AI分析</text>
-        <text class="ai-preview">{{item.ai_analysis}}</text>
-      </view>
-
-      <!-- 货币标签 -->
-      <view class="currency-tag">
-        <text>💱 {{item.currency}}</text>
-      </view>
-    </view>
-
-    <!-- 空状态 -->
-    <view wx:if="{{events.length === 0}}" class="empty-state">
-      <text class="empty-icon">📊</text>
-      <text class="empty-text">暂无事件数据</text>
-      <button class="retry-btn" bindtap="loadData">重新加载</button>
-    </view>
-  </scroll-view>
-
-  <!-- 加载提示 -->
-  <view wx:if="{{loading}}" class="loading-overlay">
-    <view class="loading-content">
-      <text class="loading-icon">⏳</text>
-      <text>正在加载数据...</text>
-    </view>
+  <!-- 底部信息 -->
+  <view class="footer-info">
+    <text class="footer-text">
+      数据来源: TradingEconomics | AI分析: {{serverInfo.aiEnabled ? '已启用' : '模拟模式'}}
+    </text>
+    <text class="footer-text">
+      最后更新: {{serverInfo.lastUpdated ? formatTime(serverInfo.lastUpdated) : '--'}}
+    </text>
   </view>
 </view>

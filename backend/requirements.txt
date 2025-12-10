@@ -2,6 +2,8 @@ Flask==2.3.2
 flask-cors==4.0.0
 requests==2.31.0
 apscheduler==3.10.4
-gunicorn==21.2.0  # 生产环境WSGI服务器
+gunicorn==21.2.0
 python-dotenv==1.0.0
 tradingeconomics==4.3.7
+alpha_vantage==2.3.1
+pandas==2.1.4
