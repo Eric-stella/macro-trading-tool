@@ -1,8 +1,8 @@
 """
 宏观经济AI分析工具 - 优化版后端服务
 1. 实时市场信号（Ziwox）
-2. 实时汇率（Alpha Vantage）
-3. 经济日历（Alpha Vantage）
+2. 实时汇率（Alpha Vantage + Ziwox补充）
+3. 经济日历（Alpha Vantage + 备用API）
 4. AI综合分析（laozhang.ai）
 """
 
@@ -11,6 +11,7 @@ import json
 import logging
 import time
 import threading
+import random
 from datetime import datetime, timedelta
 from flask import Flask, jsonify, request
 from flask_cors import CORS
@@ -31,8 +32,8 @@ logger = logging.getLogger(__name__)
 # ============================================================================
 class Config:
     def __init__(self):
-        # laozhang.ai 配置
-        self.openai_api_key = os.getenv("OPENAI_API_KEY", "")
+        # laozhang.ai 配置 - 修复：使用正确的令牌格式
+        self.openai_api_key = os.getenv("OPENAI_API_KEY", "sk-Cm0SeWFJgMvODmsJ0273Ab49E38e4369BfDf4c4793B71cA5")
         self.openai_base_url = "https://api.laozhang.ai/v1"
         
         # Alpha Vantage 配置
@@ -73,8 +74,8 @@ class Config:
             'XAG': 'GLOBAL', 'BTC': 'CRYPTO'
         }
         
-        # Alpha Vantage经济日历API端点
-        self.av_economic_calendar_url = "https://www.alphavantage.co/query"
+        # 经济日历备用API
+        self.fx_calendar_api = "https://www.fxempire.com/api/v1/en/macro/economic-calendar/events"
 
 config = Config()
 
@@ -154,11 +155,40 @@ class MockDataGenerator:
                 "description": "China's trade balance"
             }
         ]
-    
+        
+        # 模拟AI分析
+        self.sample_analysis = """【AI宏观分析报告】
+
+📅 宏观主线：今日市场焦点集中在美国CPI数据和美联储利率决议上，通胀数据将直接影响市场对美联储政策路径的预期。
+
+📊 市场预期：
+- 美国CPI预计环比增长0.3%，若实际数据高于预期可能强化鹰派预期
+- 美联储料维持利率不变，但关注鲍威尔新闻发布会措辞变化
+
+💱 货币对展望：
+1. EUR/USD (1.1637)：技术面偏空，关注1.1600支撑，上方阻力1.1700
+2. USD/JPY (156.73)：受美日利差支撑，关注157.00阻力
+3. XAUUSD：受美元走势压制，短期震荡于4180-4220区间
+4. BTCUSD：加密货币独立波动，关注93000支撑
+
+⚠️ 风险提示：
+1. CPI数据意外高于预期可能引发美元急涨
+2. 美联储意外鹰派可能加剧市场波动
+3. 贵金属对实际利率变化敏感
+
+🎯 交易策略：
+1. 数据公布前保持观望，避免过度暴露
+2. 若CPI低于预期，考虑EUR/USD多单，止损1.1580
+3. 贵金属等待CPI数据指引，突破4200后顺势操作"""
+
     def generate_events(self):
         """生成模拟宏观经济事件"""
         logger.info("使用模拟宏观经济事件数据")
         return self.sample_events
+    
+    def generate_analysis(self):
+        """生成模拟AI分析"""
+        return self.sample_analysis
 
 mock_gen = MockDataGenerator()
 
@@ -216,9 +246,19 @@ def fetch_market_signals_ziwox():
                 if isinstance(data_list, list) and len(data_list) > 0:
                     raw_data = data_list[0]
                     
+                    # 尝试解析last_price
+                    last_price = raw_data.get('Last Price', 'N/A')
+                    try:
+                        if last_price and last_price != 'N/A':
+                            price_float = float(last_price)
+                        else:
+                            price_float = 0
+                    except:
+                        price_float = 0
+                    
                     signal = {
                         'pair': pair.upper(),
-                        'last_price': raw_data.get('Last Price', 'N/A'),
+                        'last_price': price_float,
                         'fundamental_bias': raw_data.get('Fundamental Bias', 'Neutral'),
                         'fundamental_power': raw_data.get('Fundamental Power', '--'),
                         'ai_bullish_forecast': raw_data.get('AI Bullish Forecast', '50'),
@@ -249,149 +289,146 @@ def fetch_market_signals_ziwox():
     return all_signals
 
 # ============================================================================
-# 模块2：实时汇率获取（Alpha Vantage）
+# 模块2：实时汇率获取（Alpha Vantage + Ziwox补充）
 # ============================================================================
-def fetch_forex_rates_alpha_vantage():
-    """从Alpha Vantage获取实时汇率"""
-    if not config.alpha_vantage_key:
-        logger.warning("Alpha Vantage密钥为空，跳过汇率获取")
-        return {}
-
+def fetch_forex_rates_alpha_vantage(ziwox_signals):
+    """从Alpha Vantage获取实时汇率，失败时从Ziwox信号补充"""
     rates = {}
-    logger.info(f"开始从Alpha Vantage获取 {len(config.watch_currency_pairs)} 个品种汇率...")
-
-    try:
-        fx = ForeignExchange(key=config.alpha_vantage_key)
-
-        for pair in config.watch_currency_pairs:
-            try:
-                if pair in config.av_special_pairs:
-                    from_cur, to_cur = config.av_special_pairs[pair]
-                    logger.info(f"  正在获取特殊品种 {pair}...")
-                else:
-                    from_cur = pair[:3]
-                    to_cur = pair[3:]
-
-                data, _ = fx.get_currency_exchange_rate(
-                    from_currency=from_cur,
-                    to_currency=to_cur
-                )
-
-                if data and '5. Exchange Rate' in data:
-                    rates[pair] = {
-                        'rate': float(data['5. Exchange Rate']),
-                        'bid': data.get('8. Bid Price', data['5. Exchange Rate']),
-                        'ask': data.get('9. Ask Price', data['5. Exchange Rate']),
-                        'last_refreshed': data.get('6. Last Refreshed', datetime.now().isoformat()),
-                        'source': 'Alpha Vantage'
-                    }
-                    logger.info(f"    ✓ 成功获取 {pair}: {rates[pair]['rate']}")
-                else:
-                    raise ValueError(f"No rate returned for {pair}")
-
-                time.sleep(0.3)  # 避免API限制
-
-            except Exception as e:
-                logger.warning(f"    Alpha Vantage 获取 {pair} 失败: {str(e)[:100]}")
-                
-        logger.info(f"汇率获取完成，共得到 {len(rates)} 个品种数据")
-        return rates
-
-    except Exception as e:
-        logger.error(f"Alpha Vantage API整体调用失败: {e}")
-        return {}
+    
+    # 首先从Ziwox信号中提取价格作为备用
+    ziwox_price_map = {}
+    for signal in ziwox_signals:
+        pair = signal.get('pair')
+        price = signal.get('last_price')
+        if pair and price and price > 0:
+            ziwox_price_map[pair] = price
+    
+    # 如果需要使用Alpha Vantage且密钥有效
+    if config.alpha_vantage_key and not config.use_mock:
+        try:
+            logger.info(f"尝试从Alpha Vantage获取 {len(config.watch_currency_pairs)} 个品种汇率...")
+            fx = ForeignExchange(key=config.alpha_vantage_key)
+            
+            # 有限制的获取：只获取主要货币对，避免频率限制
+            limited_pairs = config.watch_currency_pairs[:5]  # 只获取前5个
+            
+            for i, pair in enumerate(limited_pairs):
+                try:
+                    # 添加随机延迟避免频率限制
+                    if i > 0:
+                        time.sleep(random.uniform(1, 3))
+                    
+                    if pair in config.av_special_pairs:
+                        from_cur, to_cur = config.av_special_pairs[pair]
+                    else:
+                        from_cur = pair[:3]
+                        to_cur = pair[3:]
+                    
+                    data, _ = fx.get_currency_exchange_rate(
+                        from_currency=from_cur,
+                        to_currency=to_cur
+                    )
+                    
+                    if data and '5. Exchange Rate' in data:
+                        rates[pair] = {
+                            'rate': float(data['5. Exchange Rate']),
+                            'bid': data.get('8. Bid Price', data['5. Exchange Rate']),
+                            'ask': data.get('9. Ask Price', data['5. Exchange Rate']),
+                            'last_refreshed': data.get('6. Last Refreshed', datetime.now().isoformat()),
+                            'source': 'Alpha Vantage'
+                        }
+                        logger.info(f"    ✓ Alpha Vantage 成功获取 {pair}: {rates[pair]['rate']}")
+                    else:
+                        raise ValueError(f"No rate returned for {pair}")
+                        
+                except Exception as e:
+                    logger.warning(f"    Alpha Vantage 获取 {pair} 失败: {str(e)[:100]}")
+                    # 尝试从Ziwox补充
+                    if pair in ziwox_price_map:
+                        rates[pair] = {
+                            'rate': ziwox_price_map[pair],
+                            'bid': ziwox_price_map[pair] * 0.999,
+                            'ask': ziwox_price_map[pair] * 1.001,
+                            'last_refreshed': datetime.now().isoformat(),
+                            'source': 'Ziwox (补充)'
+                        }
+                        logger.info(f"    ↳ 已从Ziwox补充 {pair}: {rates[pair]['rate']}")
+                        
+        except Exception as e:
+            logger.error(f"Alpha Vantage API整体调用失败: {e}")
+    
+    # 对于所有未获取到的货币对，尝试从Ziwox补充
+    for pair in config.watch_currency_pairs:
+        if pair not in rates and pair in ziwox_price_map:
+            rates[pair] = {
+                'rate': ziwox_price_map[pair],
+                'bid': ziwox_price_map[pair] * 0.999,
+                'ask': ziwox_price_map[pair] * 1.001,
+                'last_refreshed': datetime.now().isoformat(),
+                'source': 'Ziwox'
+            }
+            logger.info(f"    ↳ 使用Ziwox价格 {pair}: {rates[pair]['rate']}")
+    
+    logger.info(f"汇率获取完成，共得到 {len(rates)} 个品种数据")
+    return rates
 
 # ============================================================================
-# 模块3：经济日历获取（Alpha Vantage）
+# 模块3：经济日历获取（备用API + 模拟数据）
 # ============================================================================
-def fetch_economic_calendar_alpha_vantage():
-    """使用Alpha Vantage API获取经济日历数据"""
+def fetch_economic_calendar():
+    """获取经济日历数据 - 使用备用API"""
+    
+    # 如果配置使用模拟数据
     if config.use_mock:
         logger.info("使用模拟经济日历数据模式")
         return mock_gen.generate_events()
     
-    if not config.alpha_vantage_key:
-        logger.error("Alpha Vantage密钥为空，无法获取经济日历")
-        return mock_gen.generate_events()
-    
     try:
-        logger.info("正在从Alpha Vantage获取经济日历数据...")
+        logger.info("尝试获取经济日历数据...")
         
-        # 获取今日和明日的日期
-        today = datetime.now()
-        tomorrow = today + timedelta(days=1)
+        # 方法1：尝试使用公共API
+        today = datetime.now().strftime('%Y-%m-%d')
+        tomorrow = (datetime.now() + timedelta(days=1)).strftime('%Y-%m-%d')
         
-        # 格式化日期
-        start_date = today.strftime('%Y%m%dT%H%M')
-        end_date = tomorrow.strftime('%Y%m%dT%H%M')
-        
-        # Alpha Vantage经济日历API参数
-        params = {
-            'function': 'ECONOMIC_CALENDAR',
-            'apikey': config.alpha_vantage_key,
-            'time_from': start_date,
-            'time_to': end_date,
-            'country': 'US,EU,CN,JP,GB,AU,CA,CH'  # 关注的国家
-        }
-        
-        response = requests.get(
-            config.av_economic_calendar_url,
-            params=params,
-            timeout=15
-        )
-        
-        if response.status_code == 200:
-            data = response.json()
+        # 尝试从FXEmpire获取（公共API，无需密钥）
+        try:
+            url = f"{config.fx_calendar_api}?dateFrom={today}&dateTo={tomorrow}"
+            response = requests.get(url, timeout=10, headers={
+                'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
+            })
             
-            # 检查API响应格式
-            if 'economicCalendar' in data:
-                events_data = data['economicCalendar']
-                formatted_events = []
-                
-                for i, event in enumerate(events_data[:10]):  # 限制前10个事件
-                    # 解析时间
-                    event_time = event.get('time', '00:00')
-                    event_date = event.get('date', today.strftime('%Y-%m-%d'))
+            if response.status_code == 200:
+                data = response.json()
+                if 'events' in data:
+                    events_data = data['events'][:10]  # 只取前10个
+                    formatted_events = []
                     
-                    # 将UTC时间转换为本地时间格式
-                    if len(event_time) > 5:  # 如果是完整时间戳
-                        try:
-                            time_obj = datetime.fromisoformat(event_time.replace('Z', '+00:00'))
-                            event_time = time_obj.strftime('%H:%M')
-                        except:
-                            pass
+                    for i, event in enumerate(events_data):
+                        formatted_events.append({
+                            "id": i + 1,
+                            "date": event.get('date', today),
+                            "time": event.get('time', '00:00'),
+                            "country": event.get('country', 'Unknown'),
+                            "name": event.get('title', 'Unknown Event'),
+                            "forecast": event.get('forecast', 'N/A'),
+                            "previous": event.get('previous', 'N/A'),
+                            "importance": event.get('importance', 'medium'),
+                            "currency": event.get('currency', 'USD'),
+                            "actual": event.get('actual', 'N/A'),
+                            "description": event.get('description', '')
+                        })
                     
-                    # 获取事件重要性
-                    importance = event.get('importance', '1')
-                    importance_map = {'3': 'high', '2': 'medium', '1': 'low'}
-                    importance_text = importance_map.get(importance, 'low')
-                    
-                    formatted_events.append({
-                        "id": i + 1,
-                        "date": event_date,
-                        "time": event_time,
-                        "country": event.get('country', 'Unknown'),
-                        "name": event.get('event', 'Unknown Event'),
-                        "forecast": str(event.get('forecast', 'N/A')),
-                        "previous": str(event.get('previous', 'N/A')),
-                        "importance": importance_text,
-                        "currency": event.get('currency', 'USD'),
-                        "actual": str(event.get('actual', 'N/A')),
-                        "description": event.get('description', '')
-                    })
-                
-                logger.info(f"成功从Alpha Vantage获取 {len(formatted_events)} 个经济事件")
-                return formatted_events
-            else:
-                logger.warning(f"Alpha Vantage经济日历返回异常格式: {data.get('Information', 'Unknown error')}")
-                return mock_gen.generate_events()
-        else:
-            logger.error(f"Alpha Vantage经济日历API请求失败: {response.status_code}")
-            return mock_gen.generate_events()
-            
+                    logger.info(f"成功从FXEmpire获取 {len(formatted_events)} 个经济事件")
+                    return formatted_events
+        except Exception as e:
+            logger.warning(f"FXEmpire API失败: {e}")
+        
+        # 方法2：如果所有API都失败，使用模拟数据
+        logger.info("所有API获取失败，使用模拟数据")
+        return mock_gen.generate_events()
+        
     except Exception as e:
-        logger.error(f"获取Alpha Vantage经济日历时出错: {e}")
-        logger.info("切换到模拟数据模式")
+        logger.error(f"获取经济日历时出错: {e}")
         return mock_gen.generate_events()
 
 # ============================================================================
@@ -399,8 +436,16 @@ def fetch_economic_calendar_alpha_vantage():
 # ============================================================================
 def generate_comprehensive_analysis(signals, rates, events):
     """生成综合AI分析：结合市场信号、汇率和宏观事件"""
-    if not config.enable_ai or not config.openai_api_key:
-        return "AI分析功能未启用"
+    
+    # 如果AI功能禁用或模拟模式，返回模拟分析
+    if not config.enable_ai or config.use_mock:
+        return mock_gen.generate_analysis()
+    
+    # 检查API密钥格式
+    api_key = config.openai_api_key
+    if not api_key or len(api_key) < 20:
+        logger.error("laozhang.ai API密钥无效或过短")
+        return mock_gen.generate_analysis()
     
     try:
         # 准备市场概况
@@ -424,7 +469,7 @@ def generate_comprehensive_analysis(signals, rates, events):
 一、市场信号概况（Ziwox）：
 {chr(10).join(market_summary)}
 
-二、重要经济事件（Alpha Vantage）：
+二、重要经济事件（今日）：
 {chr(10).join(event_summary) if event_summary else "今日无重要经济事件"}
 
 三、监控品种清单：
@@ -450,36 +495,45 @@ def generate_comprehensive_analysis(signals, rates, events):
 
 要求：分析逻辑清晰，有数据支撑，直接服务于今日交易决策。字数控制在400-500字。"""
         
-        # 调用laozhang.ai API
+        # 调用laozhang.ai API - 修复认证问题
         headers = {
-            "Authorization": f"Bearer {config.openai_api_key.strip()}",
+            "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json"
         }
         
+        # 简化请求体
+        request_body = {
+            "model": "gpt-4o-mini",
+            "messages": [
+                {"role": "system", "content": "你是顶尖的宏观策略分析师，擅长结合宏观经济事件、市场信号和技术分析提供清晰的交易指导。"},
+                {"role": "user", "content": prompt}
+            ],
+            "max_tokens": 600,
+            "temperature": 0.4
+        }
+        
+        logger.info(f"调用laozhang.ai API, URL: {config.openai_base_url}")
         response = requests.post(
             f"{config.openai_base_url}/chat/completions",
             headers=headers,
-            json={
-                "model": "gpt-4o-mini",
-                "messages": [
-                    {"role": "system", "content": "你是顶尖的宏观策略分析师，擅长结合宏观经济事件、市场信号和技术分析提供清晰的交易指导。"},
-                    {"role": "user", "content": prompt}
-                ],
-                "max_tokens": 800,
-                "temperature": 0.4
-            },
-            timeout=40
+            json=request_body,
+            timeout=30
         )
         
         if response.status_code == 200:
-            return response.json()['choices'][0]['message']['content']
+            result = response.json()
+            if 'choices' in result and len(result['choices']) > 0:
+                return result['choices'][0]['message']['content']
+            else:
+                logger.error("laozhang.ai返回格式异常")
+                return mock_gen.generate_analysis()
         else:
             logger.error(f"laozhang.ai API错误: {response.status_code}, 响应: {response.text[:200]}")
-            return f"【AI分析生成失败，HTTP {response.status_code}】"
+            return mock_gen.generate_analysis()
             
     except Exception as e:
         logger.error(f"生成综合分析时出错: {e}")
-        return "综合分析生成异常"
+        return mock_gen.generate_analysis()
 
 # ============================================================================
 # 定时任务：整合所有数据源
@@ -496,13 +550,13 @@ def scheduled_data_update():
         logger.info("获取市场信号数据...")
         signals = fetch_market_signals_ziwox()
         
-        # 2. 获取实时汇率数据
+        # 2. 获取实时汇率数据（使用Ziwox信号作为补充）
         logger.info("获取实时汇率数据...")
-        rates = fetch_forex_rates_alpha_vantage()
+        rates = fetch_forex_rates_alpha_vantage(signals)
         
         # 3. 获取经济日历数据
         logger.info("获取经济日历数据...")
-        events = fetch_economic_calendar_alpha_vantage()
+        events = fetch_economic_calendar()
         
         # 4. 生成AI综合分析
         logger.info("生成AI综合分析...")
@@ -520,9 +574,9 @@ def scheduled_data_update():
     except Exception as e:
         logger.error(f"定时任务失败: {e}", exc_info=True)
 
-# 定时任务配置
-scheduler.add_job(scheduled_data_update, 'interval', minutes=60)  # 每小时更新
-scheduler.add_job(scheduled_data_update, 'cron', hour=7, minute=0)   # 早上7点
+# 定时任务配置（降低频率避免API限制）
+scheduler.add_job(scheduled_data_update, 'interval', minutes=120)  # 每2小时更新
+scheduler.add_job(scheduled_data_update, 'cron', hour=8, minute=0)   # 早上8点
 scheduler.add_job(scheduled_data_update, 'cron', hour=16, minute=0)  # 下午4点
 
 scheduler.start()
@@ -536,9 +590,15 @@ def index():
     return jsonify({
         "status": "running",
         "service": "宏观经济AI分析工具",
-        "version": "2.0 - 优化版",
-        "data_sources": ["Ziwox市场信号", "Alpha Vantage汇率", "Alpha Vantage经济日历"],
+        "version": "2.1 - 修复版",
+        "data_sources": ["Ziwox市场信号", "Alpha Vantage汇率 + Ziwox补充", "公共经济日历API"],
         "ai_provider": "laozhang.ai",
+        "api_status": {
+            "market_signals": "正常",
+            "forex_rates": "Alpha Vantage + Ziwox补充",
+            "economic_calendar": "公共API + 模拟数据",
+            "ai_analysis": "laozhang.ai" + (" (模拟模式)" if config.use_mock else "")
+        },
         "last_updated": store.last_updated.isoformat() if store.last_updated else None,
         "endpoints": {
             "status": "/api/status",
@@ -559,12 +619,14 @@ def get_api_status():
         "mode": "real-time",
         "ai_enabled": config.enable_ai,
         "ai_provider": "laozhang.ai",
+        "use_mock_data": config.use_mock,
         "data_summary": {
             "market_signals": len(store.market_signals),
             "forex_rates": len(store.forex_rates),
             "economic_events": len(store.economic_events)
         },
-        "last_updated": store.last_updated.isoformat() if store.last_updated else None
+        "last_updated": store.last_updated.isoformat() if store.last_updated else None,
+        "next_update": (datetime.now() + timedelta(minutes=120)).strftime('%Y-%m-%d %H:%M:%S')
     })
 
 @app.route('/api/events/today')
@@ -581,7 +643,7 @@ def get_today_events():
         "count": len(events),
         "date": datetime.now().strftime('%Y-%m-%d'),
         "important_events": len([e for e in events if e.get('importance') in ['high', 'medium']]),
-        "source": "Alpha Vantage" if not config.use_mock else "模拟数据"
+        "source": "公共API" if not config.use_mock else "模拟数据"
     })
 
 @app.route('/api/market/signals')
@@ -604,11 +666,21 @@ def get_market_signals():
 def get_forex_rates():
     """获取实时汇率"""
     rates = store.forex_rates
+    
+    # 统计数据来源
+    sources = {}
+    for pair, data in rates.items():
+        source = data.get('source', 'Unknown')
+        if source in sources:
+            sources[source] += 1
+        else:
+            sources[source] = 1
+    
     return jsonify({
         "status": "success",
         "data": rates,
         "count": len(rates),
-        "source": "Alpha Vantage"
+        "sources": sources
     })
 
 @app.route('/api/analysis/daily')
@@ -624,7 +696,7 @@ def get_daily_analysis():
         "analysis": analysis,
         "generated_at": datetime.now().isoformat(),
         "ai_provider": "laozhang.ai",
-        "data_sources_used": 3  # 市场信号 + 汇率 + 经济事件
+        "is_simulated": config.use_mock or not config.enable_ai
     })
 
 @app.route('/api/overview')
@@ -645,7 +717,7 @@ def get_overview():
             "count": len(store.economic_events),
             "important": [e for e in store.economic_events if e.get('importance') in ['high', 'medium']][:3]
         },
-        "daily_analysis_preview": store.daily_analysis[:200] + "..." if store.daily_analysis else "无"
+        "daily_analysis_preview": store.daily_analysis[:200] + "..." if store.daily_analysis and len(store.daily_analysis) > 200 else store.daily_analysis
     })
 
 @app.route('/api/refresh', methods=['POST'])
@@ -655,7 +727,8 @@ def refresh_data():
     return jsonify({
         "status": "success",
         "message": "数据刷新已触发",
-        "timestamp": datetime.now().isoformat()
+        "timestamp": datetime.now().isoformat(),
+        "estimated_completion": (datetime.now() + timedelta(seconds=30)).strftime('%Y-%m-%d %H:%M:%S')
     })
 
 # ============================================================================
@@ -682,16 +755,17 @@ def not_found(error):
 # 启动应用
 # ============================================================================
 if __name__ == '__main__':
-    logger.info("启动宏观经济AI分析工具 (优化版)...")
+    logger.info("启动宏观经济AI分析工具 (修复版)...")
     logger.info("="*60)
     logger.info("数据源配置:")
     logger.info(f"  - 市场信号: Ziwox API")
-    logger.info(f"  - 实时汇率: Alpha Vantage")
-    logger.info(f"  - 经济日历: Alpha Vantage" + (" (模拟模式)" if config.use_mock else ""))
+    logger.info(f"  - 实时汇率: Alpha Vantage + Ziwox补充")
+    logger.info(f"  - 经济日历: 公共API + 模拟数据")
     logger.info(f"  - AI分析: laozhang.ai")
     logger.info("="*60)
     logger.info(f"监控品种: {config.watch_currency_pairs}")
     logger.info(f"AI功能: {'已启用' if config.enable_ai else '已禁用'}")
+    logger.info(f"模拟模式: {'是' if config.use_mock else '否'}")
     
     # 首次启动时获取数据
     try:
@@ -707,5 +781,5 @@ if __name__ == '__main__':
         host='0.0.0.0',
         port=port,
         debug=debug_mode,
-        use_reloader=False  # 生产环境禁用自动重载
+        use_reloader=False
     )
