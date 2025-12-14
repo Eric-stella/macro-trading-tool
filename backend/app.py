@@ -1,9 +1,5 @@
 """
-宏观经济AI分析工具 - Forex Factory日历版
-1. 实时市场信号 (Ziwox)
-2. 实时汇率 (Alpha Vantage + Ziwox补充)
-3. 财经日历 (Forex Factory JSON API + 模拟备用)
-4. AI综合分析 (laozhang.ai)
+宏观经济AI分析工具 - Forex Factory日历版（北京时间版）
 """
 
 import os
@@ -13,7 +9,7 @@ import time
 import threading
 import random
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -24,7 +20,7 @@ from alpha_vantage.foreignexchange import ForeignExchange
 app = Flask(__name__)
 CORS(app)
 
-# 设置日志 - 更详细的格式便于调试
+# 设置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
@@ -259,12 +255,12 @@ def fetch_forex_rates_alpha_vantage(ziwox_signals):
     return rates
 
 # ============================================================================
-# 模块3：财经日历获取 (Forex Factory JSON API) - 完全重写
+# 模块3：财经日历获取 (Forex Factory JSON API) - 北京时间版
 # ============================================================================
 def fetch_calendar_forex_factory():
     """
     从Forex Factory JSON API获取本周经济日历数据
-    根据实际JSON格式重写解析函数
+    转换为北京时间（UTC+8）
     """
     try:
         logger.info("正在从Forex Factory JSON API获取经济日历...")
@@ -287,15 +283,13 @@ def fetch_calendar_forex_factory():
             
             # 验证数据格式
             if isinstance(data, list) and len(data) > 0:
-                events = parse_forex_factory_events_v2(data)
-                logger.info(f"成功从Forex Factory解析 {len(events)} 个事件")
+                events = parse_forex_factory_events_with_beijing_time(data)
+                logger.info(f"成功从Forex Factory解析 {len(events)} 个事件（北京时间）")
                 return events
             else:
                 logger.warning(f"Forex Factory API返回的数据格式不符或为空列表，数据类型: {type(data)}")
-                logger.debug(f"返回数据前500字符: {str(data)[:500]}")
         else:
             logger.error(f"Forex Factory API请求失败，状态码: {response.status_code}")
-            logger.debug(f"响应内容: {response.text[:500]}")
             
     except requests.exceptions.Timeout:
         logger.error("请求Forex Factory API超时")
@@ -303,25 +297,23 @@ def fetch_calendar_forex_factory():
         logger.error("无法连接到Forex Factory API")
     except json.JSONDecodeError as e:
         logger.error(f"Forex Factory API返回的不是有效JSON: {e}")
-        logger.debug(f"响应内容: {response.text[:500] if 'response' in locals() else '无响应'}")
     except Exception as e:
         logger.error(f"获取Forex Factory日历时出错: {str(e)}", exc_info=True)
     
     # 如果失败，回退到模拟数据
     logger.warning("Forex Factory API获取失败，回退到模拟数据")
-    return get_simulated_calendar()
+    return get_simulated_calendar_with_beijing_time()
 
-def parse_forex_factory_events_v2(raw_events):
+def parse_forex_factory_events_with_beijing_time(raw_events):
     """
-    解析Forex Factory返回的原始事件列表 - 新版
+    解析Forex Factory返回的原始事件列表，转换为北京时间
     根据实际JSON格式: {"title": "BusinessNZ Services Index", "country": "NZD", "date": "2025-12-14T16:30:00-05:00", ...}
     """
     events = []
-    today = datetime.now().date()
+    today = datetime.now(timezone(timedelta(hours=8))).date()  # 北京时间今天
     
     for i, item in enumerate(raw_events):
         if not isinstance(item, dict):
-            logger.warning(f"事件 {i} 不是字典格式，跳过")
             continue
         
         try:
@@ -337,23 +329,44 @@ def parse_forex_factory_events_v2(raw_events):
             if not title:
                 continue
             
-            # 解析ISO格式日期时间
+            # 解析ISO格式日期时间，转换为北京时间
             try:
-                # 解析ISO格式时间，如 "2025-12-14T16:30:00-05:00"
-                event_datetime = datetime.fromisoformat(date_str.replace('Z', '+00:00'))
-                
-                # 提取日期和时间部分
-                event_date = event_datetime.date()
-                event_time = event_datetime.time()
-                
-                # 只显示今天及之后的事件
-                if event_date < today:
-                    continue
+                # 解析为带时区的datetime对象
+                if date_str:
+                    # 处理可能的时区格式
+                    if date_str.endswith('Z'):
+                        # UTC时间
+                        event_datetime = datetime.fromisoformat(date_str.replace('Z', '+00:00'))
+                    else:
+                        # 带时区的时间
+                        event_datetime = datetime.fromisoformat(date_str)
                     
-                # 格式化时间
-                time_str = f"{event_time.hour:02d}:{event_time.minute:02d}"
-                date_str_formatted = event_date.strftime("%Y-%m-%d")
-                
+                    # 转换为UTC时间
+                    if event_datetime.tzinfo is not None:
+                        event_datetime_utc = event_datetime.astimezone(timezone.utc)
+                    else:
+                        # 如果没有时区信息，假设是UTC
+                        event_datetime_utc = event_datetime.replace(tzinfo=timezone.utc)
+                    
+                    # 转换为北京时间（UTC+8）
+                    beijing_timezone = timezone(timedelta(hours=8))
+                    event_datetime_beijing = event_datetime_utc.astimezone(beijing_timezone)
+                    
+                    # 提取日期和时间
+                    event_date = event_datetime_beijing.date()
+                    event_time = event_datetime_beijing.time()
+                    time_str = f"{event_time.hour:02d}:{event_time.minute:02d}"
+                    date_str_formatted = event_date.strftime("%Y-%m-%d")
+                    
+                    # 只显示今天及之后的事件
+                    if event_date < today:
+                        continue
+                else:
+                    # 如果没有日期时间，使用默认值
+                    event_date = today
+                    time_str = "00:00"
+                    date_str_formatted = today.strftime("%Y-%m-%d")
+                    
             except (ValueError, TypeError) as e:
                 logger.warning(f"解析日期时间失败: {date_str}, 错误: {e}")
                 # 使用默认值
@@ -382,7 +395,8 @@ def parse_forex_factory_events_v2(raw_events):
                 "actual": "N/A",  # Forex Factory API不提供实际值
                 "description": title[:150],
                 "source": "Forex Factory JSON API",
-                "ai_analysis": "AI分析生成中..."  # 初始AI分析
+                "ai_analysis": "AI分析生成中...",
+                "original_time": date_str  # 保留原始时间用于调试
             }
             
             events.append(event)
@@ -520,11 +534,13 @@ def get_country_code_from_currency(country_str):
     # 如果无法确定，使用前2个字符
     return country_str[:2] if len(country_str) >= 2 else "GL"
 
-def get_simulated_calendar():
-    """模拟数据生成 - 包含正确的日期时间格式"""
-    today = datetime.now()
-    today_str = today.strftime("%Y-%m-%d")
-    hour = today.hour
+def get_simulated_calendar_with_beijing_time():
+    """模拟数据生成 - 北京时间版"""
+    # 获取当前北京时间
+    beijing_timezone = timezone(timedelta(hours=8))
+    now_beijing = datetime.now(beijing_timezone)
+    today_str = now_beijing.strftime("%Y-%m-%d")
+    hour = now_beijing.hour
     
     # 基础事件模板 - 包含未来几天的数据
     base_events = []
@@ -543,7 +559,7 @@ def get_simulated_calendar():
             "importance": 3,
             "currency": "USD",
             "description": "美联储联邦基金利率决定",
-            "source": "模拟数据",
+            "source": "模拟数据（北京时间）",
             "ai_analysis": "美联储维持利率不变符合市场预期。关注会后声明中对通胀和经济的看法，这可能影响美元走势。预计美元指数将在决议后出现波动。"
         },
         {
@@ -558,17 +574,32 @@ def get_simulated_calendar():
             "importance": 2,
             "currency": "CNY",
             "description": "中国消费者价格指数同比变化",
-            "source": "模拟数据",
+            "source": "模拟数据（北京时间）",
             "ai_analysis": "中国CPI小幅回升，显示内需有所改善。这可能对人民币形成一定支撑，但影响有限。关注后续PPI数据以判断工业领域通缩压力。"
+        },
+        {
+            "id": 3,
+            "date": today_str,
+            "time": "14:00",
+            "country": "DE",
+            "name": "德国CPI月率",
+            "forecast": "0.3%",
+            "previous": "0.2%",
+            "actual": "0.4%" if hour >= 14 else "待公布",
+            "importance": 2,
+            "currency": "EUR",
+            "description": "德国消费者价格指数月度变化",
+            "source": "模拟数据（北京时间）",
+            "ai_analysis": "德国通胀数据略高于预期，可能支撑欧元。但欧洲整体经济疲软，欧元上涨空间有限。关注欧央行对通胀的评论。"
         }
     ]
     
     # 明天的事件
-    tomorrow = today + timedelta(days=1)
+    tomorrow = now_beijing + timedelta(days=1)
     tomorrow_str = tomorrow.strftime("%Y-%m-%d")
     tomorrow_events = [
         {
-            "id": 3,
+            "id": 4,
             "date": tomorrow_str,
             "time": "15:00",
             "country": "GB",
@@ -579,17 +610,17 @@ def get_simulated_calendar():
             "importance": 2,
             "currency": "GBP",
             "description": "英国国内生产总值月度增长率",
-            "source": "模拟数据",
+            "source": "模拟数据（北京时间）",
             "ai_analysis": "英国经济增长略好于预期，可能减轻英国央行降息压力。英镑可能获得短期支撑，但整体走势仍受美元和风险情绪影响。"
         }
     ]
     
     # 后天的事件
-    day_after = today + timedelta(days=2)
+    day_after = now_beijing + timedelta(days=2)
     day_after_str = day_after.strftime("%Y-%m-%d")
     day_after_events = [
         {
-            "id": 4,
+            "id": 5,
             "date": day_after_str,
             "time": "20:30",
             "country": "US",
@@ -600,23 +631,58 @@ def get_simulated_calendar():
             "importance": 2,
             "currency": "USD",
             "description": "美国每周首次申请失业救济人数",
-            "source": "模拟数据",
+            "source": "模拟数据（北京时间）",
             "ai_analysis": "初请数据略高于预期，显示劳动力市场有所降温。这可能会减轻美联储加息压力，对美元形成轻微压力，但影响有限。"
+        }
+    ]
+    
+    # 低重要性事件
+    low_importance_events = [
+        {
+            "id": 6,
+            "date": today_str,
+            "time": "07:00",
+            "country": "AU",
+            "name": "澳大利亚消费者信心指数",
+            "forecast": "85.2",
+            "previous": "84.6",
+            "actual": "85.5" if hour >= 7 else "待公布",
+            "importance": 1,
+            "currency": "AUD",
+            "description": "澳大利亚消费者信心月度调查",
+            "source": "模拟数据（北京时间）",
+            "ai_analysis": "消费者信心略有好转，但对澳元影响有限。澳元主要受大宗商品价格和全球风险情绪影响。"
+        },
+        {
+            "id": 7,
+            "date": today_str,
+            "time": "18:00",
+            "country": "EU",
+            "name": "欧元区工业信心指数",
+            "forecast": "-5.5",
+            "previous": "-5.8",
+            "actual": "待公布",
+            "importance": 1,
+            "currency": "EUR",
+            "description": "欧元区工业信心调查",
+            "source": "模拟数据（北京时间）",
+            "ai_analysis": "工业信心小幅改善，但欧洲制造业整体仍疲软。对欧元影响有限，关注后续制造业PMI数据。"
         }
     ]
     
     base_events.extend(today_events)
     base_events.extend(tomorrow_events)
     base_events.extend(day_after_events)
+    base_events.extend(low_importance_events)
     
-    logger.info(f"使用模拟财经日历数据，共 {len(base_events)} 个事件")
+    logger.info(f"使用模拟财经日历数据（北京时间），共 {len(base_events)} 个事件")
     return base_events
 
 def fetch_economic_calendar():
     """主函数：获取财经日历，优先使用Forex Factory JSON API"""
     if config.use_mock:
         logger.info("配置为使用模拟数据模式")
-        return get_simulated_calendar()
+        return get_simulated_calendar_with_beijing_time()
     
     # 优先尝试：Forex Factory JSON API
     events = fetch_calendar_forex_factory()
@@ -625,10 +691,10 @@ def fetch_economic_calendar():
     
     # 备用：模拟数据
     logger.warning("Forex Factory数据抓取失败，使用模拟数据")
-    return get_simulated_calendar()
+    return get_simulated_calendar_with_beijing_time()
 
 # ============================================================================
-# 模块4：AI综合分析生成 (laozhang.ai)
+# 模块4：AI综合分析生成 (laozhang.ai) - 保持不变
 # ============================================================================
 def generate_ai_analysis_for_event(event):
     """为单个事件生成AI分析"""
@@ -645,7 +711,7 @@ def generate_ai_analysis_for_event(event):
 事件信息：
 - 国家：{event.get('country', '未知')}
 - 事件：{event.get('name', '未知事件')}
-- 时间：{event.get('date', '')} {event.get('time', '')}
+- 时间：{event.get('date', '')} {event.get('time', '')}（北京时间）
 - 预测值：{event.get('forecast', 'N/A')}
 - 前值：{event.get('previous', 'N/A')}
 - 重要性：{event.get('importance', 1)}级
@@ -731,7 +797,7 @@ def generate_comprehensive_analysis(signals, rates, events):
 【实时市场数据 - 来源Ziwox】
 {chr(10).join(market_summary) if market_summary else "暂无市场数据"}
 
-【今日财经日历 - 重要事件】
+【今日财经日历 - 重要事件（北京时间）】
 {chr(10).join(event_summary) if event_summary else "今日无重要财经事件"}
 
 【分析要求】
@@ -852,7 +918,7 @@ def execute_data_update():
         logger.info(f"数据更新成功完成:")
         logger.info(f"  - 市场信号: {len(signals)} 个")
         logger.info(f"  - 汇率数据: {len(rates)} 个")
-        logger.info(f"  - 财经日历: {len(events)} 个 (来源: {events[0]['source'] if events else '无'})")
+        logger.info(f"  - 财经日历: {len(events)} 个")
         logger.info(f"  - 事件AI分析: {len(individual_analysis)} 个")
         logger.info(f"  - 综合AI分析: 已生成，长度 {len(analysis)} 字符")
         logger.info("="*60)
@@ -907,28 +973,19 @@ scheduler.start()
 def index():
     return jsonify({
         "status": "running",
-        "service": "宏观经济AI分析工具 - Forex Factory日历版",
-        "version": "3.0",
+        "service": "宏观经济AI分析工具 - Forex Factory日历版（北京时间）",
+        "version": "3.1",
         "data_sources": {
             "market_signals": "Ziwox",
             "forex_rates": "Alpha Vantage + Ziwox补充",
             "economic_calendar": "Forex Factory JSON API + 模拟",
             "ai_analysis": "laozhang.ai"
         },
+        "timezone": "北京时间 (UTC+8)",
         "update_status": {
             "is_updating": store.is_updating,
             "last_updated": store.last_updated.isoformat() if store.last_updated else None,
             "last_error": store.last_update_error
-        },
-        "endpoints": {
-            "status": "/api/status",
-            "events": "/api/events/today",
-            "summary": "/api/summary",
-            "market_signals": "/api/market/signals",
-            "forex_rates": "/api/forex/rates",
-            "analysis": "/api/analysis/daily",
-            "refresh": "/api/refresh",
-            "overview": "/api/overview"
         }
     })
 
@@ -937,6 +994,7 @@ def get_api_status():
     return jsonify({
         "status": "healthy",
         "ai_enabled": config.enable_ai,
+        "timezone": "北京时间 (UTC+8)",
         "update_status": {
             "is_updating": store.is_updating,
             "last_updated": store.last_updated.isoformat() if store.last_updated else None,
@@ -990,14 +1048,25 @@ def get_today_events():
         if 'ai_analysis' not in event:
             event['ai_analysis'] = "AI分析生成中..."
     
+    # 统计各重要性级别的事件数量
+    high_count = len([e for e in events if e.get('importance', 1) == 3])
+    medium_count = len([e for e in events if e.get('importance', 1) == 2])
+    low_count = len([e for e in events if e.get('importance', 1) == 1])
+    
     source = events[0]['source'] if events else "无数据"
     return jsonify({
         "status": "success",
         "data": events,
         "count": len(events),
         "source": source,
-        "important_events": len([e for e in events if e.get('importance', 1) >= 2]),
-        "generated_at": datetime.now().isoformat()
+        "importance_stats": {
+            "high": high_count,
+            "medium": medium_count,
+            "low": low_count,
+            "total": len(events)
+        },
+        "generated_at": datetime.now(timezone(timedelta(hours=8))).isoformat(),
+        "timezone": "北京时间 (UTC+8)"
     })
 
 @app.route('/api/summary')
@@ -1018,8 +1087,9 @@ def get_today_summary():
     return jsonify({
         "status": "success",
         "summary": summary,
-        "generated_at": store.last_updated.isoformat() if store.last_updated else datetime.now().isoformat(),
+        "generated_at": store.last_updated.isoformat() if store.last_updated else datetime.now(timezone(timedelta(hours=8))).isoformat(),
         "ai_enabled": config.enable_ai,
+        "timezone": "北京时间 (UTC+8)",
         "statistics": {
             "total_events": total_events,
             "high_impact_events": high_impact,
@@ -1059,19 +1129,31 @@ def get_daily_analysis():
     return jsonify({
         "status": "success",
         "analysis": analysis,
-        "generated_at": datetime.now().isoformat(),
+        "generated_at": datetime.now(timezone(timedelta(hours=8))).isoformat(),
         "ai_provider": "laozhang.ai",
+        "timezone": "北京时间 (UTC+8)",
         "data_sources_used": 3
     })
 
 @app.route('/api/overview')
 def get_overview():
+    events = store.economic_events
+    high_count = len([e for e in events if e.get('importance', 1) == 3])
+    medium_count = len([e for e in events if e.get('importance', 1) == 2])
+    low_count = len([e for e in events if e.get('importance', 1) == 1])
+    
     return jsonify({
         "status": "success",
-        "timestamp": datetime.now().isoformat(),
+        "timestamp": datetime.now(timezone(timedelta(hours=8))).isoformat(),
+        "timezone": "北京时间 (UTC+8)",
         "market_signals_count": len(store.market_signals),
         "forex_rates_count": len(store.forex_rates),
         "economic_events_count": len(store.economic_events),
+        "importance_breakdown": {
+            "high": high_count,
+            "medium": medium_count,
+            "low": low_count
+        },
         "has_ai_analysis": bool(store.daily_analysis and len(store.daily_analysis) > 10),
         "individual_ai_analysis_count": len(store.individual_ai_analysis)
     })
@@ -1086,24 +1168,17 @@ def not_found(error):
                            "/api/overview", "/api/refresh"]
     }), 404
 
-@app.errorhandler(405)
-def method_not_allowed(error):
-    return jsonify({
-        "error": "Method Not Allowed",
-        "message": "请求方法不允许",
-        "allowed_methods": ['GET', 'POST']
-    }), 405
-
 # ============================================================================
 # 启动应用
 # ============================================================================
 if __name__ == '__main__':
     logger.info("="*60)
-    logger.info("启动宏观经济AI分析工具 (Forex Factory日历版)")
+    logger.info("启动宏观经济AI分析工具 (Forex Factory日历版 - 北京时间)")
     logger.info(f"监控品种: {config.watch_currency_pairs}")
     logger.info(f"财经日历源: Forex Factory JSON API + 模拟备用")
     logger.info(f"AI分析服务: laozhang.ai (已启用: {config.enable_ai})")
     logger.info(f"模拟模式: {config.use_mock}")
+    logger.info(f"时区: 北京时间 (UTC+8)")
     logger.info("注意: Forex Factory API有频率限制，请勿频繁请求")
     logger.info("="*60)
 
