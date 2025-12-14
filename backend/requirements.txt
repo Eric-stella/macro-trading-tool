@@ -7,3 +7,4 @@ python-dotenv==1.0.0
 tradingeconomics==4.3.7
 alpha_vantage==2.3.1
 pandas==2.1.4
+APScheduler==3.10.4
