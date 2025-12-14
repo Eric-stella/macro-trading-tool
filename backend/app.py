@@ -259,41 +259,40 @@ def fetch_forex_rates_alpha_vantage(ziwox_signals):
     return rates
 
 # ============================================================================
-# 模块3：财经日历获取 (Forex Factory JSON API)
+# 模块3：财经日历获取 (Forex Factory JSON API) - 完全重写
 # ============================================================================
 def fetch_calendar_forex_factory():
     """
     从Forex Factory JSON API获取本周经济日历数据
+    根据实际JSON格式重写解析函数
     """
     try:
         logger.info("正在从Forex Factory JSON API获取经济日历...")
-        url = config.forex_factory_url
         
-        # 添加版本参数和时间戳避免缓存
-        params = {
-            'version': '2e51c1d85c12835c82322cd58bd05d7b',
-            '_': int(time.time() * 1000)
-        }
+        # 添加随机参数避免缓存
+        version_hash = ''.join(random.choices('0123456789abcdef', k=32))
+        url = f"{config.forex_factory_url}?version={version_hash}&_={int(time.time() * 1000)}"
         
         headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
             'Accept': 'application/json',
-            'Referer': 'https://www.forexfactory.com/'
+            'Referer': 'https://www.forexfactory.com/',
+            'Origin': 'https://www.forexfactory.com'
         }
         
-        response = requests.get(url, params=params, headers=headers, timeout=15)
+        response = requests.get(url, headers=headers, timeout=20)
         
         if response.status_code == 200:
             data = response.json()
             
             # 验证数据格式
             if isinstance(data, list) and len(data) > 0:
-                events = parse_forex_factory_events(data)
+                events = parse_forex_factory_events_v2(data)
                 logger.info(f"成功从Forex Factory解析 {len(events)} 个事件")
                 return events
             else:
-                logger.warning("Forex Factory API返回的数据格式不符或为空列表")
-                logger.debug(f"返回数据: {data}")
+                logger.warning(f"Forex Factory API返回的数据格式不符或为空列表，数据类型: {type(data)}")
+                logger.debug(f"返回数据前500字符: {str(data)[:500]}")
         else:
             logger.error(f"Forex Factory API请求失败，状态码: {response.status_code}")
             logger.debug(f"响应内容: {response.text[:500]}")
@@ -312,70 +311,76 @@ def fetch_calendar_forex_factory():
     logger.warning("Forex Factory API获取失败，回退到模拟数据")
     return get_simulated_calendar()
 
-def parse_forex_factory_events(raw_events):
+def parse_forex_factory_events_v2(raw_events):
     """
-    解析Forex Factory返回的原始事件列表
-    改进：处理时间显示问题
+    解析Forex Factory返回的原始事件列表 - 新版
+    根据实际JSON格式: {"title": "BusinessNZ Services Index", "country": "NZD", "date": "2025-12-14T16:30:00-05:00", ...}
     """
     events = []
     today = datetime.now().date()
     
     for i, item in enumerate(raw_events):
         if not isinstance(item, dict):
+            logger.warning(f"事件 {i} 不是字典格式，跳过")
             continue
         
         try:
-            # 提取日期和时间
-            date_str = item.get("date", "")
-            time_str = item.get("time", "")
-            
-            # 处理日期 - 只显示今天及之后的事件
-            try:
-                event_date = datetime.strptime(date_str, "%Y-%m-%d").date()
-                if event_date < today:
-                    continue
-            except (ValueError, TypeError):
-                continue  # 跳过日期解析失败的事件
-            
-            # 格式化时间 - 修复时间显示问题
-            formatted_time = format_time_forex_factory_improved(time_str)
-            
-            # 如果时间解析失败，跳过该事件
-            if formatted_time == "00:00" and time_str != "00:00":
-                logger.warning(f"时间解析失败: {time_str}，使用原始时间")
-                formatted_time = time_str if time_str else "00:00"
-            
-            # 重要性映射
-            impact = item.get("impact", "Low")
-            importance = map_importance_to_level(impact)
-            
-            # 提取国家/货币信息
+            # 提取事件基本信息
+            title = item.get("title", "")
             country = item.get("country", "")
-            currency = item.get("currency", "")
-            
-            if not currency and country:
-                currency = get_currency_from_country_forex_factory(country)
-            
-            # 事件名称
-            title = item.get("title", item.get("event", "经济事件"))
-            
-            # 预测值和前值
+            date_str = item.get("date", "")
+            impact = item.get("impact", "Low")
             forecast = item.get("forecast", "")
             previous = item.get("previous", "")
+            
+            # 跳过没有标题的事件
+            if not title:
+                continue
+            
+            # 解析ISO格式日期时间
+            try:
+                # 解析ISO格式时间，如 "2025-12-14T16:30:00-05:00"
+                event_datetime = datetime.fromisoformat(date_str.replace('Z', '+00:00'))
+                
+                # 提取日期和时间部分
+                event_date = event_datetime.date()
+                event_time = event_datetime.time()
+                
+                # 只显示今天及之后的事件
+                if event_date < today:
+                    continue
+                    
+                # 格式化时间
+                time_str = f"{event_time.hour:02d}:{event_time.minute:02d}"
+                date_str_formatted = event_date.strftime("%Y-%m-%d")
+                
+            except (ValueError, TypeError) as e:
+                logger.warning(f"解析日期时间失败: {date_str}, 错误: {e}")
+                # 使用默认值
+                event_date = today
+                time_str = "00:00"
+                date_str_formatted = today.strftime("%Y-%m-%d")
+            
+            # 重要性映射
+            importance = map_impact_to_importance(impact)
+            
+            # 货币和国家代码
+            currency = get_currency_from_country(country)
+            country_code = get_country_code_from_currency(country)
             
             # 构建事件对象
             event = {
                 "id": i + 1,
-                "date": date_str,
-                "time": formatted_time,
-                "country": get_country_code_forex_factory(country),
-                "name": title[:80],
+                "date": date_str_formatted,
+                "time": time_str,
+                "country": country_code,
+                "name": title[:100],
                 "forecast": str(forecast)[:30] if forecast not in ["", None] else "N/A",
                 "previous": str(previous)[:30] if previous not in ["", None] else "N/A",
                 "importance": importance,
-                "currency": currency[:3] if currency else "USD",
+                "currency": currency,
                 "actual": "N/A",  # Forex Factory API不提供实际值
-                "description": f"{title} - {item.get('description', '')}"[:150],
+                "description": title[:150],
                 "source": "Forex Factory JSON API",
                 "ai_analysis": "AI分析生成中..."  # 初始AI分析
             }
@@ -389,135 +394,143 @@ def parse_forex_factory_events(raw_events):
     # 按日期和时间排序
     events.sort(key=lambda x: (x["date"], x["time"]))
     
-    return events[:50]  # 限制返回数量
+    # 限制返回数量
+    return events[:50]
 
-def format_time_forex_factory_improved(time_str):
-    """改进的时间格式化函数"""
-    if not time_str:
-        return "00:00"
-    
-    time_str = str(time_str).strip()
-    
-    # 如果已经是HH:MM格式
-    if re.match(r'^\d{1,2}:\d{2}$', time_str):
-        parts = time_str.split(':')
-        hour = parts[0].zfill(2)
-        minute = parts[1] if len(parts) > 1 else "00"
-        return f"{hour}:{minute}"
-    
-    # 如果是HHMM格式（如0930）
-    if re.match(r'^\d{3,4}$', time_str):
-        if len(time_str) == 3:
-            return f"0{time_str[0]}:{time_str[1:]}"
-        elif len(time_str) == 4:
-            return f"{time_str[:2]}:{time_str[2:]}"
-    
-    # 如果是整点（如14）
-    if re.match(r'^\d{1,2}$', time_str):
-        hour = time_str.zfill(2)
-        return f"{hour}:00"
-    
-    # 尝试提取时间部分
-    time_match = re.search(r'(\d{1,2}):?(\d{2})?', time_str)
-    if time_match:
-        hour = time_match.group(1).zfill(2)
-        minute = time_match.group(2) if time_match.group(2) else "00"
-        return f"{hour}:{minute}"
-    
-    return "00:00"
-
-def map_importance_to_level(impact):
-    """映射Forex Factory的重要性级别到数字（1-3）"""
+def map_impact_to_importance(impact):
+    """映射影响级别到重要性数值"""
     if not impact:
         return 1
     
     impact = str(impact).lower()
     
-    if impact in ["high", "3", "red"]:
+    if impact in ["high", "red"]:
         return 3
-    elif impact in ["medium", "2", "orange", "yellow"]:
+    elif impact in ["medium", "orange", "yellow"]:
         return 2
     else:
         return 1
 
-def get_country_code_forex_factory(country_str):
-    """根据Forex Factory的国家字符串获取国家代码"""
+def get_currency_from_country(country_str):
+    """根据country字段获取货币代码"""
+    if not country_str:
+        return "USD"
+    
+    country_str = str(country_str).upper()
+    
+    # 如果已经是3位货币代码，直接返回
+    if len(country_str) == 3 and country_str.isalpha():
+        # 常见货币代码
+        common_currencies = ["USD", "EUR", "GBP", "JPY", "AUD", "CAD", "CHF", "CNY",
+                            "NZD", "RUB", "BRL", "INR", "KRW", "MXN", "ZAR", "SEK",
+                            "NOK", "DKK", "TRY", "PLN", "HKD", "SGD", "THB", "IDR"]
+        if country_str in common_currencies:
+            return country_str
+    
+    # 国家/地区到货币的映射
+    country_to_currency = {
+        "US": "USD", "USA": "USD",
+        "EU": "EUR", "EURO": "EUR", "EZ": "EUR",
+        "UK": "GBP", "GB": "GBP", "GBR": "GBP",
+        "JP": "JPY", "JPN": "JPY",
+        "AU": "AUD", "AUS": "AUD",
+        "CA": "CAD", "CAN": "CAD",
+        "CH": "CHF", "CHE": "CHF",
+        "CN": "CNY", "CHN": "CNY",
+        "NZ": "NZD", "NZL": "NZD",
+        "RU": "RUB", "RUS": "RUB",
+        "BR": "BRL", "BRA": "BRL",
+        "IN": "INR", "IND": "INR",
+        "KR": "KRW", "KOR": "KRW",
+        "MX": "MXN", "MEX": "MXN",
+        "ZA": "ZAR", "ZAF": "ZAR",
+        "SE": "SEK", "SWE": "SEK",
+        "NO": "NOK", "NOR": "NOK",
+        "DK": "DKK", "DNK": "DKK",
+        "TR": "TRY", "TUR": "TRY",
+        "PL": "PLN", "POL": "PLN",
+        "HK": "HKD", "HKG": "HKD",
+        "SG": "SGD", "SGP": "SGD",
+        "TH": "THB", "THA": "THB",
+        "ID": "IDR", "IDN": "IDR"
+    }
+    
+    # 尝试匹配国家代码
+    for country_code, currency in country_to_currency.items():
+        if country_str == country_code or country_str.startswith(country_code):
+            return currency
+    
+    # 默认返回USD
+    return "USD"
+
+def get_country_code_from_currency(country_str):
+    """根据country字段获取国家代码"""
     if not country_str:
         return "GL"
     
     country_str = str(country_str).upper()
     
-    # Forex Factory通常使用货币代码作为国家标识
+    # 货币到国家代码的映射
     currency_to_country = {
         "USD": "US", "EUR": "EU", "GBP": "GB", "JPY": "JP",
         "AUD": "AU", "CAD": "CA", "CHF": "CH", "CNY": "CN",
         "NZD": "NZ", "RUB": "RU", "BRL": "BR", "INR": "IN",
         "KRW": "KR", "MXN": "MX", "ZAR": "ZA", "SEK": "SE",
         "NOK": "NO", "DKK": "DK", "TRY": "TR", "PLN": "PL",
-        "CHN": "CN", "USA": "US", "UK": "GB", "GER": "DE",
-        "FRA": "FR", "ITA": "IT", "ESP": "ES", "JPN": "JP"
+        "HKD": "HK", "SGD": "SG", "THB": "TH", "IDR": "ID"
     }
     
-    # 首先检查是否为货币代码
+    # 如果本身就是货币代码
     if country_str in currency_to_country:
         return currency_to_country[country_str]
     
-    # 检查是否为常见国家缩写
-    if len(country_str) == 2 and country_str.isalpha():
-        return country_str
-    
-    # 尝试从字符串中提取国家代码
-    if "USA" in country_str or "US" in country_str:
-        return "US"
-    elif "CHINA" in country_str or "CN" in country_str:
-        return "CN"
-    elif "EURO" in country_str or "EU" in country_str:
-        return "EU"
-    elif "JAPAN" in country_str or "JP" in country_str:
-        return "JP"
-    elif "UK" in country_str or "GB" in country_str:
-        return "GB"
-    elif "AUSTRALIA" in country_str or "AU" in country_str:
-        return "AU"
-    
-    return country_str[:2] if len(country_str) >= 2 else "GL"
-
-def get_currency_from_country_forex_factory(country_str):
-    """根据Forex Factory的国家字符串获取货币代码"""
-    if not country_str:
-        return "USD"
-    
-    country_str = str(country_str).upper()
-    
-    # 如果已经是货币代码，直接返回
-    if len(country_str) == 3 and country_str.isalpha():
-        # 检查是否为已知货币
-        known_currencies = ["USD", "EUR", "GBP", "JPY", "AUD", "CAD", "CHF", "CNY", 
-                           "NZD", "RUB", "BRL", "INR", "KRW", "MXN", "ZAR"]
-        if country_str in known_currencies:
-            return country_str
-    
-    # 国家代码到货币代码的映射
-    country_to_currency = {
-        "US": "USD", "EU": "EUR", "GB": "GBP", "JP": "JPY",
-        "AU": "AUD", "CA": "CAD", "CH": "CHF", "CN": "CNY",
-        "NZ": "NZD", "RU": "RUB", "BR": "BRL", "IN": "INR",
-        "KR": "KRW", "MX": "MXN", "ZA": "ZAR", "SE": "SEK",
-        "NO": "NOK", "DK": "DKK", "TR": "TRY", "PL": "PLN",
-        "DE": "EUR", "FR": "EUR", "IT": "EUR", "ES": "EUR"
+    # 国家代码映射
+    country_mapping = {
+        "US": "US", "USA": "US", "UNITED STATES": "US",
+        "EU": "EU", "EURO": "EU", "EZ": "EU", "EUROZONE": "EU",
+        "UK": "GB", "GB": "GB", "GBR": "GB", "UNITED KINGDOM": "GB",
+        "JP": "JP", "JPN": "JP", "JAPAN": "JP",
+        "AU": "AU", "AUS": "AU", "AUSTRALIA": "AU",
+        "CA": "CA", "CAN": "CA", "CANADA": "CA",
+        "CH": "CH", "CHE": "CH", "SWITZERLAND": "CH",
+        "CN": "CN", "CHN": "CN", "CHINA": "CN",
+        "NZ": "NZ", "NZL": "NZ", "NEW ZEALAND": "NZ",
+        "RU": "RU", "RUS": "RU", "RUSSIA": "RU",
+        "BR": "BR", "BRA": "BR", "BRAZIL": "BR",
+        "IN": "IN", "IND": "IN", "INDIA": "IN",
+        "KR": "KR", "KOR": "KR", "KOREA": "KR",
+        "MX": "MX", "MEX": "MX", "MEXICO": "MX",
+        "ZA": "ZA", "ZAF": "ZA", "SOUTH AFRICA": "ZA",
+        "SE": "SE", "SWE": "SE", "SWEDEN": "SE",
+        "NO": "NO", "NOR": "NO", "NORWAY": "NO",
+        "DK": "DK", "DNK": "DK", "DENMARK": "DK",
+        "TR": "TR", "TUR": "TR", "TURKEY": "TR",
+        "PL": "PL", "POL": "PL", "POLAND": "PL",
+        "HK": "HK", "HKG": "HK", "HONG KONG": "HK",
+        "SG": "SG", "SGP": "SG", "SINGAPORE": "SG",
+        "TH": "TH", "THA": "TH", "THAILAND": "TH",
+        "ID": "ID", "IDN": "ID", "INDONESIA": "ID"
     }
     
-    country_code = get_country_code_forex_factory(country_str)
-    return country_to_currency.get(country_code, "USD")
+    # 尝试匹配国家
+    for code, country_code in country_mapping.items():
+        if country_str == code or country_str.startswith(code):
+            return country_code
+    
+    # 如果无法确定，使用前2个字符
+    return country_str[:2] if len(country_str) >= 2 else "GL"
 
 def get_simulated_calendar():
-    """模拟数据生成 - 改进版，包含AI分析"""
+    """模拟数据生成 - 包含正确的日期时间格式"""
     today = datetime.now()
     today_str = today.strftime("%Y-%m-%d")
     hour = today.hour
     
-    # 基础事件模板
-    base_events = [
+    # 基础事件模板 - 包含未来几天的数据
+    base_events = []
+    
+    # 今天的事件
+    today_events = [
         {
             "id": 1,
             "date": today_str,
@@ -547,53 +560,54 @@ def get_simulated_calendar():
             "description": "中国消费者价格指数同比变化",
             "source": "模拟数据",
             "ai_analysis": "中国CPI小幅回升，显示内需有所改善。这可能对人民币形成一定支撑，但影响有限。关注后续PPI数据以判断工业领域通缩压力。"
-        },
+        }
+    ]
+    
+    # 明天的事件
+    tomorrow = today + timedelta(days=1)
+    tomorrow_str = tomorrow.strftime("%Y-%m-%d")
+    tomorrow_events = [
         {
             "id": 3,
-            "date": today_str,
+            "date": tomorrow_str,
             "time": "15:00",
             "country": "GB",
             "name": "英国GDP月率",
             "forecast": "0.1%",
             "previous": "0.0%",
-            "actual": "0.2%" if hour >= 15 else "待公布",
+            "actual": "待公布",
             "importance": 2,
             "currency": "GBP",
             "description": "英国国内生产总值月度增长率",
             "source": "模拟数据",
             "ai_analysis": "英国经济增长略好于预期，可能减轻英国央行降息压力。英镑可能获得短期支撑，但整体走势仍受美元和风险情绪影响。"
-        },
+        }
+    ]
+    
+    # 后天的事件
+    day_after = today + timedelta(days=2)
+    day_after_str = day_after.strftime("%Y-%m-%d")
+    day_after_events = [
         {
             "id": 4,
-            "date": today_str,
+            "date": day_after_str,
             "time": "20:30",
             "country": "US",
             "name": "美国初请失业金人数",
             "forecast": "210K",
             "previous": "209K",
-            "actual": "211K" if hour >= 20 else "待公布",
+            "actual": "待公布",
             "importance": 2,
             "currency": "USD",
             "description": "美国每周首次申请失业救济人数",
             "source": "模拟数据",
             "ai_analysis": "初请数据略高于预期，显示劳动力市场有所降温。这可能会减轻美联储加息压力，对美元形成轻微压力，但影响有限。"
-        },
-        {
-            "id": 5,
-            "date": today_str,
-            "time": "10:00",
-            "country": "EU",
-            "name": "欧元区CPI月率",
-            "forecast": "0.3%",
-            "previous": "0.2%",
-            "actual": "0.4%" if hour >= 10 else "待公布",
-            "importance": 2,
-            "currency": "EUR",
-            "description": "欧元区消费者价格指数月度变化",
-            "source": "模拟数据",
-            "ai_analysis": "欧元区通胀略高于预期，可能推迟欧洲央行降息时间点。短期内对欧元形成支撑，但长期仍受经济增长前景制约。"
         }
     ]
+    
+    base_events.extend(today_events)
+    base_events.extend(tomorrow_events)
+    base_events.extend(day_after_events)
     
     logger.info(f"使用模拟财经日历数据，共 {len(base_events)} 个事件")
     return base_events
@@ -798,7 +812,7 @@ def generate_individual_ai_analysis(events):
     return individual_analysis
 
 # ============================================================================
-# 核心数据更新函数 - 改进版
+# 核心数据更新函数
 # ============================================================================
 def execute_data_update():
     """执行数据更新的核心逻辑"""
@@ -838,7 +852,7 @@ def execute_data_update():
         logger.info(f"数据更新成功完成:")
         logger.info(f"  - 市场信号: {len(signals)} 个")
         logger.info(f"  - 汇率数据: {len(rates)} 个")
-        logger.info(f"  - 财经日历: {len(events)} 个")
+        logger.info(f"  - 财经日历: {len(events)} 个 (来源: {events[0]['source'] if events else '无'})")
         logger.info(f"  - 事件AI分析: {len(individual_analysis)} 个")
         logger.info(f"  - 综合AI分析: 已生成，长度 {len(analysis)} 字符")
         logger.info("="*60)
@@ -887,14 +901,14 @@ scheduler.add_job(scheduled_data_update, 'cron', hour=16, minute=0)
 scheduler.start()
 
 # ============================================================================
-# Flask路由 - 增加/summary接口
+# Flask路由
 # ============================================================================
 @app.route('/')
 def index():
     return jsonify({
         "status": "running",
         "service": "宏观经济AI分析工具 - Forex Factory日历版",
-        "version": "2.7",
+        "version": "3.0",
         "data_sources": {
             "market_signals": "Ziwox",
             "forex_rates": "Alpha Vantage + Ziwox补充",
