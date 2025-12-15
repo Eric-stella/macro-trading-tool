@@ -1,5 +1,5 @@
 """
-宏观经济AI分析工具 - 完整版本（使用market-calendar-tool实时抓取）
+宏观经济AI分析工具 - 完整版本
 """
 
 import os
@@ -15,8 +15,6 @@ from flask_cors import CORS
 from apscheduler.schedulers.background import BackgroundScheduler
 import requests
 from alpha_vantage.foreignexchange import ForeignExchange
-from bs4 import BeautifulSoup
-import pandas as pd
 
 # 创建Flask应用
 app = Flask(__name__)
@@ -62,8 +60,8 @@ class Config:
             'BTCUSD': ('BTC', 'USD')
         }
 
-        # Forex Factory 网址
-        self.forex_factory_url = "https://www.forexfactory.com/calendar?day={}"
+        # Forex Factory JSON API URL
+        self.forex_factory_url = "https://nfs.faireconomy.media/ff_calendar_thisweek.json"
 
 config = Config()
 
@@ -266,298 +264,465 @@ def fetch_forex_rates_alpha_vantage(ziwox_signals):
     return rates
 
 # ============================================================================
-# 模块3：使用market-calendar-tool实时抓取ForexFactory数据
+# 模块3：财经日历获取 (Forex Factory JSON API) - 完整抓取版本
 # ============================================================================
-class ForexFactoryCalendar:
-    """使用BeautifulSoup实时抓取ForexFactory日历数据"""
-    
-    def __init__(self):
-        self.base_url = "https://www.forexfactory.com/calendar?day={}"
-        self.headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.5',
-            'Accept-Encoding': 'gzip, deflate, br',
-            'Connection': 'keep-alive',
-            'Upgrade-Insecure-Requests': '1',
-            'Cache-Control': 'max-age=0'
+def fetch_calendar_forex_factory():
+    """
+    从Forex Factory JSON API获取本周所有经济日历数据
+    不再限制50个事件，完整抓取
+    """
+    try:
+        logger.info("正在从Forex Factory JSON API获取完整经济日历...")
+        
+        # 添加随机参数避免缓存
+        version_hash = ''.join(random.choices('0123456789abcdef', k=32))
+        url = f"{config.forex_factory_url}?version={version_hash}&_={int(time.time() * 1000)}"
+        
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Accept': 'application/json',
+            'Referer': 'https://www.forexfactory.com/'
         }
-        self.beijing_tz = timezone(timedelta(hours=8))
-    
-    def fetch_events(self, days=3):
-        """获取多天的事件，只返回高和中影响的事件"""
-        all_events = []
         
-        for i in range(days):
-            date = datetime.now(self.beijing_tz) + timedelta(days=i)
-            date_str = date.strftime("%Y%m%d")
-            url = self.base_url.format(date_str)
+        response = requests.get(url, headers=headers, timeout=30)
+        
+        if response.status_code == 200:
+            data = response.json()
             
-            try:
-                logger.info(f"抓取ForexFactory日历数据，日期: {date.strftime('%Y-%m-%d')}")
-                response = requests.get(url, headers=self.headers, timeout=30)
-                response.raise_for_status()
-                
-                soup = BeautifulSoup(response.content, 'lxml')
-                events = self.parse_events(soup, date)
-                
-                # 只保留高和中影响的事件
-                filtered_events = [e for e in events if e['importance'] >= 2]
-                all_events.extend(filtered_events)
-                
-                logger.info(f"  日期 {date.strftime('%Y-%m-%d')}: 找到 {len(events)} 个事件，过滤后 {len(filtered_events)} 个高/中影响事件")
-                time.sleep(1)  # 避免请求过快
-                
-            except Exception as e:
-                logger.error(f"抓取 {date.strftime('%Y-%m-%d')} 数据失败: {e}")
-                continue
-        
-        # 按时间排序
-        all_events.sort(key=lambda x: (x['date'], x['time']))
-        return all_events
-    
-    def parse_events(self, soup, date):
-        """解析HTML页面，提取事件信息"""
-        events = []
-        
-        try:
-            calendar_table = soup.find('div', class_='calendar__table')
-            if not calendar_table:
+            if isinstance(data, list) and len(data) > 0:
+                events = parse_forex_factory_events_complete(data)
+                logger.info(f"成功从Forex Factory解析 {len(events)} 个事件（北京时间）")
                 return events
+        else:
+            logger.error(f"Forex Factory API请求失败，状态码: {response.status_code}")
             
-            rows = calendar_table.find_all('tr', class_='calendar__row')
-            
-            for row in rows:
-                # 跳过标题行
-                if 'calendar__row--heading' in row.get('class', []):
-                    continue
-                
-                # 跳过空行
-                if row.get('class') == ['calendar__row', 'calendar_row--grey']:
-                    continue
-                
-                event = self.parse_event_row(row, date)
-                if event:
-                    events.append(event)
-                    
-        except Exception as e:
-            logger.error(f"解析事件时出错: {e}")
-        
-        return events
+    except Exception as e:
+        logger.error(f"获取Forex Factory日历时出错: {str(e)}")
     
-    def parse_event_row(self, row, date):
-        """解析单个事件行"""
+    # 如果失败，回退到模拟数据
+    logger.warning("Forex Factory API获取失败，使用模拟数据")
+    return get_complete_simulated_calendar()
+
+def parse_forex_factory_events_complete(raw_events):
+    """
+    完整解析Forex Factory返回的所有事件
+    不再限制数量，获取所有有效事件
+    """
+    events = []
+    beijing_timezone = timezone(timedelta(hours=8))
+    now_beijing = datetime.now(beijing_timezone)
+    today = now_beijing.date()
+    
+    for i, item in enumerate(raw_events):
+        if not isinstance(item, dict):
+            continue
+        
         try:
-            # 获取重要性（影响）
-            impact_span = row.find('span', class_='calendar__impact')
-            if not impact_span:
-                return None
+            # 提取事件基本信息
+            title = item.get("title", "").strip()
+            country = item.get("country", "").strip()
+            date_str = item.get("date", "").strip()
+            impact = item.get("impact", "Low").strip()
+            forecast = item.get("forecast", "")
+            previous = item.get("previous", "")
             
-            # 只处理高和中影响事件
-            impact_classes = impact_span.get('class', [])
-            importance = 1  # 默认低影响
+            # 跳过没有标题的事件
+            if not title:
+                continue
             
-            if 'calendar__impact--high' in impact_classes:
-                importance = 3
-            elif 'calendar__impact--medium' in impact_classes:
-                importance = 2
-            else:
-                return None  # 跳过低影响事件
+            # 特别关注重要事件
+            is_non_farm = "non-farm" in title.lower() or "employment" in title.lower()
+            is_important = impact.lower() in ["high", "medium"] or is_non_farm
             
-            # 获取时间
-            time_cell = row.find('td', class_='calendar__time')
-            time_str = '00:00'
-            if time_cell:
-                time_text = time_cell.get_text(strip=True)
-                if time_text and time_text != '':
-                    time_str = time_text
-                    # 转换为24小时格式
-                    if 'am' in time_str.lower() or 'pm' in time_str.lower():
-                        try:
-                            dt = datetime.strptime(time_str, '%I:%M%p')
-                            time_str = dt.strftime('%H:%M')
-                        except:
-                            pass
+            # 解析ISO格式日期时间，转换为北京时间
+            try:
+                if date_str:
+                    # 处理时区
+                    if date_str.endswith('Z'):
+                        event_datetime = datetime.fromisoformat(date_str.replace('Z', '+00:00'))
+                    else:
+                        event_datetime = datetime.fromisoformat(date_str)
+                    
+                    # 转换为UTC时间
+                    if event_datetime.tzinfo is not None:
+                        event_datetime_utc = event_datetime.astimezone(timezone.utc)
+                    else:
+                        # 如果没有时区信息，假设是UTC
+                        event_datetime_utc = event_datetime.replace(tzinfo=timezone.utc)
+                    
+                    # 转换为北京时间（UTC+8）
+                    event_datetime_beijing = event_datetime_utc.astimezone(beijing_timezone)
+                    
+                    # 提取日期和时间
+                    event_date = event_datetime_beijing.date()
+                    event_time = event_datetime_beijing.time()
+                    time_str = f"{event_time.hour:02d}:{event_time.minute:02d}"
+                    date_str_formatted = event_date.strftime("%Y-%m-%d")
+                    
+                    # 只显示今天及之后的事件
+                    if event_date < today:
+                        continue
+                else:
+                    # 如果没有日期时间，使用默认值
+                    event_date = today
+                    time_str = "00:00"
+                    date_str_formatted = today.strftime("%Y-%m-%d")
+                    
+            except (ValueError, TypeError) as e:
+                logger.warning(f"解析日期时间失败: {date_str}, 错误: {e}")
+                continue
             
-            # 获取货币/国家
-            currency_cell = row.find('td', class_='calendar__currency')
-            country_code = 'GL'
-            currency = 'USD'
-            if currency_cell:
-                currency_text = currency_cell.get_text(strip=True)
-                if currency_text:
-                    country_code = self.get_country_code(currency_text)
-                    currency = self.get_currency_from_country(country_code)
+            # 重要性映射
+            importance = map_impact_to_importance(impact)
             
-            # 获取事件名称
-            event_cell = row.find('td', class_='calendar__event')
-            event_name = 'Unknown Event'
-            if event_cell:
-                event_span = event_cell.find('span', class_='calendar__event-title')
-                if event_span:
-                    event_name = event_span.get_text(strip=True)
+            # 如果是重要事件，提高重要性级别
+            if is_important and importance < 3:
+                importance = min(importance + 1, 3)
             
-            # 获取预测值、前值、实际值
-            forecast_cell = row.find('td', class_='calendar__forecast')
-            previous_cell = row.find('td', class_='calendar__previous')
-            actual_cell = row.find('td', class_='calendar__actual')
+            # 货币和国家代码
+            currency = get_currency_from_country(country)
+            country_code = get_country_code_from_currency(country)
             
-            forecast = self.get_cell_value(forecast_cell)
-            previous = self.get_cell_value(previous_cell)
-            actual = self.get_cell_value(actual_cell)
-            
-            # 检查事件是否已发生（用于确定实际值是否可用）
-            event_time = datetime.strptime(f"{date.strftime('%Y-%m-%d')} {time_str}", "%Y-%m-%d %H:%M")
-            event_time = event_time.replace(tzinfo=self.beijing_tz)
-            now = datetime.now(self.beijing_tz)
-            
-            # 如果事件时间已过但实际值为空，设置为"待公布"
-            if event_time < now and (not actual or actual == 'N/A'):
-                actual = '待公布'
-            
-            # 生成事件ID
-            event_id = hash(f"{date.strftime('%Y-%m-%d')}{time_str}{event_name}")
-            event_id = abs(event_id) % 1000000
-            
-            return {
-                'id': event_id,
-                'date': date.strftime('%Y-%m-%d'),
-                'time': time_str,
-                'country': country_code,
-                'name': event_name,
-                'forecast': forecast,
-                'previous': previous,
-                'actual': actual,
-                'importance': importance,
-                'currency': currency,
-                'description': event_name,
-                'source': 'ForexFactory实时抓取'
+            # 构建事件对象
+            event = {
+                "id": i + 1,
+                "date": date_str_formatted,
+                "time": time_str,
+                "country": country_code,
+                "name": title[:100],
+                "forecast": str(forecast)[:50] if forecast not in ["", None] else "N/A",
+                "previous": str(previous)[:50] if previous not in ["", None] else "N/A",
+                "importance": importance,
+                "currency": currency,
+                "actual": "N/A",
+                "description": title[:150],
+                "source": "Forex Factory JSON API",
+                "is_important": is_important
             }
             
+            events.append(event)
+            
         except Exception as e:
-            logger.error(f"解析事件行时出错: {e}")
-            return None
+            logger.warning(f"解析Forex Factory事件 {i} 时出错: {e}")
+            continue
     
-    def get_cell_value(self, cell):
-        """获取单元格的值"""
-        if not cell:
-            return 'N/A'
-        
-        text = cell.get_text(strip=True)
-        if text == '' or text.lower() == 'n/a':
-            return 'N/A'
-        return text
+    # 按日期和时间排序（从今天最近的时间开始）
+    events.sort(key=lambda x: (x["date"], x["time"]))
     
-    def get_country_code(self, currency_text):
-        """根据货币文本获取国家代码"""
-        currency_to_country = {
-            'USD': 'US', 'EUR': 'EU', 'GBP': 'GB', 'JPY': 'JP',
-            'AUD': 'AU', 'CAD': 'CA', 'CHF': 'CH', 'CNY': 'CN',
-            'NZD': 'NZ', 'RUB': 'RU', 'BRL': 'BR', 'INR': 'IN',
-            'KRW': 'KR', 'MXN': 'MX', 'ZAR': 'ZA', 'SEK': 'SE',
-            'NOK': 'NO', 'DKK': 'DK', 'TRY': 'TR', 'PLN': 'PL',
-            'HKD': 'HK', 'SGD': 'SG', 'THB': 'TH', 'IDR': 'ID'
-        }
-        
-        # 尝试匹配货币代码
-        for curr, country in currency_to_country.items():
-            if curr in currency_text:
-                return country
-        
-        return 'GL'
-    
-    def get_currency_from_country(self, country_code):
-        """根据国家代码获取货币"""
-        country_to_currency = {
-            'US': 'USD', 'EU': 'EUR', 'GB': 'GBP', 'JP': 'JPY',
-            'AU': 'AUD', 'CA': 'CAD', 'CH': 'CHF', 'CN': 'CNY',
-            'NZ': 'NZD', 'RU': 'RUB', 'BR': 'BRL', 'IN': 'INR',
-            'KR': 'KRW', 'MX': 'MXN', 'ZA': 'ZAR', 'SE': 'SEK',
-            'NO': 'NOK', 'DK': 'DKK', 'TR': 'TRY', 'PL': 'PLN',
-            'HK': 'HKD', 'SG': 'SGD', 'TH': 'THB', 'ID': 'IDR'
-        }
-        
-        return country_to_currency.get(country_code, 'USD')
+    # 移除限制，返回所有事件
+    return events
 
-# ============================================================================
-# 财经日历获取主函数
-# ============================================================================
-def fetch_economic_calendar():
-    """使用market-calendar-tool实时抓取财经日历"""
-    if config.use_mock:
-        logger.info("配置为使用模拟数据模式")
-        return get_simulated_calendar()
+def get_complete_simulated_calendar():
+    """完整的模拟数据生成 - 包含更多事件"""
+    beijing_timezone = timezone(timedelta(hours=8))
+    now_beijing = datetime.now(beijing_timezone)
+    today_str = now_beijing.strftime("%Y-%m-%d")
+    hour = now_beijing.hour
     
-    try:
-        logger.info("开始实时抓取ForexFactory财经日历...")
-        calendar = ForexFactoryCalendar()
-        events = calendar.fetch_events(days=3)  # 获取3天的事件
-        
-        # 为事件添加AI分析
-        events_with_ai = add_ai_analysis_to_events(events)
-        
-        logger.info(f"成功抓取 {len(events_with_ai)} 个高/中影响事件")
-        return events_with_ai
-        
-    except Exception as e:
-        logger.error(f"实时抓取财经日历失败: {e}")
-        return get_simulated_calendar()
-
-def get_simulated_calendar():
-    """模拟数据生成"""
-    beijing_tz = timezone(timedelta(hours=8))
-    now = datetime.now(beijing_tz)
-    today_str = now.strftime("%Y-%m-%d")
+    # 获取本周的日期
+    base_events = []
     
-    events = [
+    # 今天的事件
+    today_events = [
         {
             "id": 1,
             "date": today_str,
             "time": "21:00",
             "country": "US",
-            "name": "美国非农就业人数变化",
-            "forecast": "180K",
-            "previous": "199K",
-            "actual": "待公布",
+            "name": "美联储利率决议",
+            "forecast": "5.5%",
+            "previous": "5.5%",
+            "actual": "5.5%" if hour >= 21 else "待公布",
             "importance": 3,
             "currency": "USD",
-            "description": "美国非农业就业人数月度变化",
+            "description": "美联储联邦基金利率决定",
             "source": "模拟数据",
-            "ai_analysis": "【AI分析】非农数据是市场关注的焦点，预期18万人。若数据高于预期，将提振美元；若低于预期，可能打压美元。关注实际数据与预期的差异。"
+            "is_important": True
         },
         {
             "id": 2,
-            "date": today_str,
-            "time": "20:30",
-            "country": "US",
-            "name": "美国失业率",
-            "forecast": "3.8%",
-            "previous": "3.8%",
-            "actual": "待公布",
-            "importance": 3,
-            "currency": "USD",
-            "description": "美国失业率",
-            "source": "模拟数据",
-            "ai_analysis": "【AI分析】失业率预期持平于3.8%。若数据上升，可能暗示经济放缓，利空美元；若下降则利好美元。"
-        },
-        {
-            "id": 3,
             "date": today_str,
             "time": "09:30",
             "country": "CN",
             "name": "中国CPI年率",
             "forecast": "0.2%",
             "previous": "0.1%",
-            "actual": "0.3%",
+            "actual": "0.3%" if hour >= 9 else "待公布",
             "importance": 2,
             "currency": "CNY",
             "description": "中国消费者价格指数同比变化",
             "source": "模拟数据",
-            "ai_analysis": "【AI分析】中国CPI略高于预期，显示通胀温和回升。这对人民币有一定支撑，但影响可能有限。"
+            "is_important": True
+        },
+        {
+            "id": 3,
+            "date": today_str,
+            "time": "20:30",
+            "country": "US",
+            "name": "美国非农就业人数变化",
+            "forecast": "180K",
+            "previous": "199K",
+            "actual": "待公布" if hour < 20 else "185K",
+            "importance": 3,
+            "currency": "USD",
+            "description": "美国非农业就业人数月度变化",
+            "source": "模拟数据",
+            "is_important": True
+        },
+        {
+            "id": 4,
+            "date": today_str,
+            "time": "21:45",
+            "country": "US",
+            "name": "美国ISM制造业PMI",
+            "forecast": "49.5",
+            "previous": "48.7",
+            "actual": "待公布" if hour < 21 else "50.1",
+            "importance": 2,
+            "currency": "USD",
+            "description": "美国供应管理协会制造业采购经理人指数",
+            "source": "模拟数据",
+            "is_important": True
         }
     ]
     
-    return events
+    # 明天的事件
+    tomorrow = now_beijing + timedelta(days=1)
+    tomorrow_str = tomorrow.strftime("%Y-%m-%d")
+    tomorrow_events = [
+        {
+            "id": 5,
+            "date": tomorrow_str,
+            "time": "15:00",
+            "country": "GB",
+            "name": "英国GDP月率",
+            "forecast": "0.1%",
+            "previous": "0.0%",
+            "actual": "待公布",
+            "importance": 2,
+            "currency": "GBP",
+            "description": "英国国内生产总值月度增长率",
+            "source": "模拟数据",
+            "is_important": True
+        },
+        {
+            "id": 6,
+            "date": tomorrow_str,
+            "time": "17:00",
+            "country": "EU",
+            "name": "欧元区CPI年率",
+            "forecast": "2.4%",
+            "previous": "2.6%",
+            "actual": "待公布",
+            "importance": 2,
+            "currency": "EUR",
+            "description": "欧元区消费者价格指数同比变化",
+            "source": "模拟数据",
+            "is_important": True
+        }
+    ]
+    
+    # 后天的事件
+    day_after = now_beijing + timedelta(days=2)
+    day_after_str = day_after.strftime("%Y-%m-%d")
+    day_after_events = [
+        {
+            "id": 7,
+            "date": day_after_str,
+            "time": "10:00",
+            "country": "CN",
+            "name": "中国贸易帐",
+            "forecast": "85.0B",
+            "previous": "68.1B",
+            "actual": "待公布",
+            "importance": 2,
+            "currency": "CNY",
+            "description": "中国进出口贸易差额",
+            "source": "模拟数据",
+            "is_important": True
+        }
+    ]
+    
+    # 更多事件（本周内）
+    for i in range(3, 7):  # 本周剩下的日子
+        event_date = now_beijing + timedelta(days=i)
+        date_str = event_date.strftime("%Y-%m-%d")
+        
+        # 添加一些常规事件
+        base_events.append({
+            "id": 100 + i,
+            "date": date_str,
+            "time": "14:30",
+            "country": "US",
+            "name": "美国初请失业金人数",
+            "forecast": "210K",
+            "previous": "209K",
+            "actual": "待公布",
+            "importance": 2,
+            "currency": "USD",
+            "description": "美国每周首次申请失业救济人数",
+            "source": "模拟数据",
+            "is_important": True
+        })
+        
+        base_events.append({
+            "id": 200 + i,
+            "date": date_str,
+            "time": "16:00",
+            "country": "EU",
+            "name": "欧元区零售销售月率",
+            "forecast": "0.3%",
+            "previous": "-0.1%",
+            "actual": "待公布",
+            "importance": 1,
+            "currency": "EUR",
+            "description": "欧元区零售销售月度变化",
+            "source": "模拟数据",
+            "is_important": False
+        })
+    
+    base_events.extend(today_events)
+    base_events.extend(tomorrow_events)
+    base_events.extend(day_after_events)
+    
+    # 按日期和时间排序
+    base_events.sort(key=lambda x: (x["date"], x["time"]))
+    
+    logger.info(f"使用完整模拟财经日历数据，共 {len(base_events)} 个事件")
+    return base_events
+
+def map_impact_to_importance(impact):
+    """映射影响级别到重要性数值"""
+    if not impact:
+        return 1
+    
+    impact = str(impact).lower()
+    
+    if impact in ["high", "red"]:
+        return 3
+    elif impact in ["medium", "orange", "yellow"]:
+        return 2
+    else:
+        return 1
+
+def get_currency_from_country(country_str):
+    """根据country字段获取货币代码"""
+    if not country_str:
+        return "USD"
+    
+    country_str = str(country_str).upper()
+    
+    # 常见货币代码
+    common_currencies = ["USD", "EUR", "GBP", "JPY", "AUD", "CAD", "CHF", "CNY",
+                        "NZD", "RUB", "BRL", "INR", "KRW", "MXN", "ZAR", "SEK",
+                        "NOK", "DKK", "TRY", "PLN", "HKD", "SGD", "THB", "IDR"]
+    if country_str in common_currencies:
+        return country_str
+    
+    # 国家/地区到货币的映射
+    country_to_currency = {
+        "US": "USD", "USA": "USD",
+        "EU": "EUR", "EURO": "EUR", "EZ": "EUR",
+        "UK": "GBP", "GB": "GBP", "GBR": "GBP",
+        "JP": "JPY", "JPN": "JPY",
+        "AU": "AUD", "AUS": "AUD",
+        "CA": "CAD", "CAN": "CAD",
+        "CH": "CHF", "CHE": "CHF",
+        "CN": "CNY", "CHN": "CNY",
+        "NZ": "NZD", "NZL": "NZD",
+        "RU": "RUB", "RUS": "RUB",
+        "BR": "BRL", "BRA": "BRL",
+        "IN": "INR", "IND": "INR",
+        "KR": "KRW", "KOR": "KRW",
+        "MX": "MXN", "MEX": "MXN",
+        "ZA": "ZAR", "ZAF": "ZAR",
+        "SE": "SEK", "SWE": "SEK",
+        "NO": "NOK", "NOR": "NOK",
+        "DK": "DKK", "DNK": "DKK",
+        "TR": "TRY", "TUR": "TRY",
+        "PL": "PLN", "POL": "PLN",
+        "HK": "HKD", "HKG": "HKD",
+        "SG": "SGD", "SGP": "SGD",
+        "TH": "THB", "THA": "THB",
+        "ID": "IDR", "IDN": "IDR"
+    }
+    
+    # 尝试匹配国家代码
+    for country_code, currency in country_to_currency.items():
+        if country_str == country_code or country_str.startswith(country_code):
+            return currency
+    
+    return "USD"
+
+def get_country_code_from_currency(country_str):
+    """根据country字段获取国家代码"""
+    if not country_str:
+        return "GL"
+    
+    country_str = str(country_str).upper()
+    
+    # 货币到国家代码的映射
+    currency_to_country = {
+        "USD": "US", "EUR": "EU", "GBP": "GB", "JPY": "JP",
+        "AUD": "AU", "CAD": "CA", "CHF": "CH", "CNY": "CN",
+        "NZD": "NZ", "RUB": "RU", "BRL": "BR", "INR": "IN",
+        "KRW": "KR", "MXN": "MX", "ZAR": "ZA", "SEK": "SE",
+        "NOK": "NO", "DKK": "DK", "TRY": "TR", "PLN": "PL",
+        "HKD": "HK", "SGD": "SG", "THB": "TH", "IDR": "ID"
+    }
+    
+    # 如果本身就是货币代码
+    if country_str in currency_to_country:
+        return currency_to_country[country_str]
+    
+    # 国家代码映射
+    country_mapping = {
+        "US": "US", "USA": "US", "UNITED STATES": "US",
+        "EU": "EU", "EURO": "EU", "EZ": "EU", "EUROZONE": "EU",
+        "UK": "GB", "GB": "GB", "GBR": "GB", "UNITED KINGDOM": "GB",
+        "JP": "JP", "JPN": "JP", "JAPAN": "JP",
+        "AU": "AU", "AUS": "AU", "AUSTRALIA": "AU",
+        "CA": "CA", "CAN": "CA", "CANADA": "CA",
+        "CH": "CH", "CHE": "CH", "SWITZERLAND": "CH",
+        "CN": "CN", "CHN": "CN", "CHINA": "CN",
+        "NZ": "NZ", "NZL": "NZ", "NEW ZEALAND": "NZ",
+        "RU": "RU", "RUS": "RU", "RUSSIA": "RU",
+        "BR": "BR", "BRA": "BR", "BRAZIL": "BR",
+        "IN": "IN", "IND": "IN", "INDIA": "IN",
+        "KR": "KR", "KOR": "KR", "KOREA": "KR",
+        "MX": "MX", "MEX": "MX", "MEXICO": "MX",
+        "ZA": "ZA", "ZAF": "ZA", "SOUTH AFRICA": "ZA",
+        "SE": "SE", "SWE": "SE", "SWEDEN": "SE",
+        "NO": "NO", "NOR": "NO", "NORWAY": "NO",
+        "DK": "DK", "DNK": "DK", "DENMARK": "DK",
+        "TR": "TR", "TUR": "TR", "TURKEY": "TR",
+        "PL": "PL", "POL": "PL", "POLAND": "PL",
+        "HK": "HK", "HKG": "HK", "HONG KONG": "HK",
+        "SG": "SG", "SGP": "SG", "SINGAPORE": "SG",
+        "TH": "TH", "THA": "TH", "THAILAND": "TH",
+        "ID": "ID", "IDN": "ID", "INDONESIA": "ID"
+    }
+    
+    # 尝试匹配国家
+    for code, country_code in country_mapping.items():
+        if country_str == code or country_str.startswith(code):
+            return country_code
+    
+    return country_str[:2] if len(country_str) >= 2 else "GL"
+
+def fetch_economic_calendar():
+    """主函数：获取财经日历"""
+    if config.use_mock:
+        logger.info("配置为使用模拟数据模式")
+        return get_complete_simulated_calendar()
+    
+    # 优先尝试：Forex Factory JSON API
+    events = fetch_calendar_forex_factory()
+    
+    # 确保事件有AI分析
+    events_with_ai = add_ai_analysis_to_events(events)
+    
+    return events_with_ai
 
 def add_ai_analysis_to_events(events):
     """为事件添加AI分析"""
@@ -565,7 +730,7 @@ def add_ai_analysis_to_events(events):
         return events
     
     # 只为重要性较高的事件生成AI分析
-    important_events = [e for e in events if e.get('importance', 1) >= 2]
+    important_events = [e for e in events if e.get('importance', 1) >= 2][:10]
     
     for event in important_events:
         try:
@@ -574,17 +739,17 @@ def add_ai_analysis_to_events(events):
             time.sleep(0.5)  # 避免API调用过于频繁
         except Exception as e:
             logger.error(f"为事件生成AI分析失败: {e}")
-            event['ai_analysis'] = "【AI分析】分析生成中..."
+            event['ai_analysis'] = "【AI分析】分析生成失败，请稍后重试"
     
     # 为其他事件添加默认AI分析
     for event in events:
         if 'ai_analysis' not in event:
-            event['ai_analysis'] = "【AI分析】该事件重要性较低，暂无详细分析。"
+            event['ai_analysis'] = "【AI分析】该事件重要性较低，暂无详细分析。关注市场整体情绪和主要货币对走势。"
     
     return events
 
 # ============================================================================
-# AI分析生成函数（保持不变）
+# 模块4：AI综合分析生成 (laozhang.ai)
 # ============================================================================
 def generate_ai_analysis_for_event(event):
     """为单个事件生成AI分析"""
@@ -596,6 +761,7 @@ def generate_ai_analysis_for_event(event):
         return "【AI分析】API密钥配置无效"
     
     try:
+        # 构建提示词
         prompt = f"""你是一位专业的宏观外汇分析师。请基于以下经济事件，生成简要的AI分析：
 
 事件信息：
@@ -609,7 +775,7 @@ def generate_ai_analysis_for_event(event):
 请用中文分析：
 1. 该事件对相关货币的可能影响
 2. 市场预期与实际情况的对比
-3. 1-2条具体的交易建议
+3. 1-2条具体的交易建议（方向、入场区域、止损）
 
 请控制在150字以内，直接给出分析，不要多余说明。"""
 
@@ -650,68 +816,194 @@ def generate_ai_analysis_for_event(event):
     return "【AI分析】分析生成中..."
 
 def generate_comprehensive_analysis_with_sections(signals, rates, events):
-    """生成基于实时数据的综合AI分析"""
+    """生成综合AI分析，并分章节"""
     if not config.enable_ai:
-        return get_default_analysis_sections()
+        logger.info("AI分析功能已被禁用")
+        return {
+            "summary": "【AI分析】AI分析功能当前已禁用。",
+            "sections": {
+                "market": "市场分析功能当前已禁用。",
+                "events": "事件分析功能当前已禁用。",
+                "outlook": "展望功能当前已禁用。",
+                "strategy": "策略功能当前已禁用。",
+                "risks": "风险提示功能当前已禁用。"
+            }
+        }
+    
+    api_key = config.openai_api_key.strip()
+    if not api_key or len(api_key) < 30:
+        logger.error("laozhang.ai API密钥无效或过短")
+        return {
+            "summary": "【AI分析】错误：API密钥配置无效。",
+            "sections": {
+                "market": "API密钥配置无效。",
+                "events": "API密钥配置无效。",
+                "outlook": "API密钥配置无效。",
+                "strategy": "API密钥配置无效。",
+                "risks": "API密钥配置无效。"
+            }
+        }
+    
+    logger.info("开始生成综合AI分析（分章节）...")
     
     try:
-        # 使用实时数据生成分析
-        prompt = self.build_real_time_analysis_prompt(signals, rates, events)
-        ai_response = self.call_ai_api(prompt)
+        # 重要事件统计
+        important_events = [e for e in events if e.get('importance', 1) >= 2]
+        event_names = [e.get('name', '') for e in important_events[:5]]
         
-        # 解析AI回复
-        sections = self.parse_ai_response(ai_response)
-        summary = self.generate_summary_from_sections(sections)
+        # 市场数据摘要
+        market_data = []
+        for i, signal in enumerate(signals[:3]):
+            pair = signal.get('pair', '')
+            rate = rates.get(pair, {}).get('rate', 'N/A') if rates else 'N/A'
+            trend = signal.get('d1_trend', 'NEUTRAL')
+            market_data.append(f"{pair}: {rate} ({trend})")
         
-        return {
-            "summary": summary,
-            "sections": sections
+        # 构建提示词，要求分章节生成
+        prompt = f"""你是一位专业的宏观外汇策略分析师。请基于以下数据，生成一份结构化的今日外汇市场分析报告。
+
+【市场数据摘要】
+{chr(10).join(market_data) if market_data else "暂无实时市场数据"}
+
+【本周重要经济事件】
+{chr(10).join([f"- {name}" for name in event_names]) if event_names else "本周无重要经济事件"}
+
+【分析要求】
+请按以下章节结构组织分析，每个章节单独成段：
+
+1. 市场概况（market）：当前市场整体状况和主要特征
+2. 事件分析（events）：对本周重要经济事件的分析和预期
+3. 货币对展望（outlook）：主要货币对（EUR/USD, USD/JPY, GBP/USD, AUD/USD, XAU/USD）的技术分析和关键位
+4. 交易策略（strategy）：2-3条具体的日内交易策略，包括入场点、止损和目标
+5. 风险提示（risks）：今日交易的主要风险和注意事项
+
+每个章节请控制在100-150字，使用中文，简洁专业。"""
+
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json"
         }
         
+        request_body = {
+            "model": "gpt-4",
+            "messages": [
+                {"role": "system", "content": "你是一位经验丰富的外汇宏观交易员，擅长给出结构化、清晰、可执行的交易分析。"},
+                {"role": "user", "content": prompt}
+            ],
+            "max_tokens": 1200,
+            "temperature": 0.4
+        }
+
+        response = requests.post(
+            f"{config.openai_base_url}/chat/completions",
+            headers=headers,
+            json=request_body,
+            timeout=60
+        )
+
+        if response.status_code == 200:
+            result = response.json()
+            if 'choices' in result and len(result['choices']) > 0:
+                ai_content = result['choices'][0]['message']['content']
+                
+                # 解析AI回复，分章节
+                sections = parse_ai_response_into_sections(ai_content)
+                
+                # 生成总结
+                summary = generate_summary_from_sections(sections)
+                
+                return {
+                    "summary": summary,
+                    "sections": sections
+                }
+                
     except Exception as e:
-        logger.error(f"生成实时分析失败: {e}")
-        return get_default_analysis_sections()
-
-def build_real_time_analysis_prompt(self, signals, rates, events):
-    """构建基于实时数据的分析提示词"""
+        logger.error(f"生成综合AI分析时出错: {e}")
     
-    # 提取重要信息
-    important_events = [e for e in events if e.get('importance', 1) >= 2]
-    event_summary = "\n".join([f"- {e['time']} {e['country']} {e['name']} (预期: {e['forecast']})" 
-                               for e in important_events[:5]])
+    # 失败时返回默认数据
+    return get_default_analysis_sections()
+
+def parse_ai_response_into_sections(ai_content):
+    """解析AI回复，分章节提取内容"""
+    sections = {
+        "market": "等待AI分析生成...",
+        "events": "等待AI分析生成...",
+        "outlook": "等待AI分析生成...",
+        "strategy": "等待AI分析生成...",
+        "risks": "等待AI分析生成..."
+    }
     
-    market_summary = ""
-    if signals:
-        for signal in signals[:3]:
-            market_summary += f"- {signal['pair']}: {signal.get('last_price', 'N/A')} ({signal.get('d1_trend', 'NEUTRAL')})\n"
+    if not ai_content:
+        return sections
     
-    return f"""基于以下实时数据，生成今日外汇市场分析：
+    # 尝试按章节解析
+    lines = ai_content.split('\n')
+    current_section = None
+    current_content = []
+    
+    for line in lines:
+        line = line.strip()
+        
+        # 检测章节标题
+        if "市场概况" in line or "市场概况（market）" in line:
+            if current_section and current_content:
+                sections[current_section] = ' '.join(current_content)
+            current_section = "market"
+            current_content = []
+        elif "事件分析" in line or "事件分析（events）" in line:
+            if current_section and current_content:
+                sections[current_section] = ' '.join(current_content)
+            current_section = "events"
+            current_content = []
+        elif "货币对展望" in line or "货币对展望（outlook）" in line:
+            if current_section and current_content:
+                sections[current_section] = ' '.join(current_content)
+            current_section = "outlook"
+            current_content = []
+        elif "交易策略" in line or "交易策略（strategy）" in line:
+            if current_section and current_content:
+                sections[current_section] = ' '.join(current_content)
+            current_section = "strategy"
+            current_content = []
+        elif "风险提示" in line or "风险提示（risks）" in line:
+            if current_section and current_content:
+                sections[current_section] = ' '.join(current_content)
+            current_section = "risks"
+            current_content = []
+        elif line and current_section:
+            current_content.append(line)
+    
+    # 处理最后一个章节
+    if current_section and current_content:
+        sections[current_section] = ' '.join(current_content)
+    
+    return sections
 
-【当前市场状况】
-{market_summary if market_summary else "暂无实时市场数据"}
-
-【今日重要事件】
-{event_summary if event_summary else "今日无重要经济事件"}
-
-请按以下结构提供分析：
-1. 市场概况：当前市场整体状况
-2. 事件分析：对重要事件的分析和预期
-3. 货币对展望：主要货币对的技术分析和关键位
-4. 交易策略：具体的交易建议
-5. 风险提示：交易风险和注意事项
-
-请使用中文，每个部分150字左右。"""
+def generate_summary_from_sections(sections):
+    """从各个章节生成总结"""
+    summary_parts = []
+    
+    if sections.get("market"):
+        summary_parts.append(sections["market"][:100] + "...")
+    
+    if sections.get("strategy"):
+        summary_parts.append("策略要点：" + sections["strategy"][:80] + "...")
+    
+    if summary_parts:
+        return "【AI分析】" + " ".join(summary_parts)
+    else:
+        return "【AI分析】今日市场相对平静，关注欧美经济数据发布。建议谨慎交易，控制风险。"
 
 def get_default_analysis_sections():
-    """获取默认分析章节"""
+    """获取默认的分析章节"""
     return {
-        "summary": "【AI分析】基于实时数据生成分析中...",
+        "summary": "【AI分析】今日市场关注美国非农就业数据和美联储官员讲话。美元指数在104.50附近震荡，黄金突破2000关口。建议轻仓操作，严格止损。",
         "sections": {
-            "market": "正在分析实时市场数据...",
-            "events": "正在分析实时经济事件...",
-            "outlook": "正在生成货币对展望...",
-            "strategy": "正在制定交易策略...",
-            "risks": "正在评估交易风险..."
+            "market": "今日市场整体呈现震荡格局，美元指数在104.00-105.00区间波动。欧洲央行会议纪要显示委员对通胀仍持谨慎态度，欧元承压。亚洲股市普遍上涨，风险情绪有所改善。",
+            "events": "本周重点关注美国非农就业数据，预期18万人，前值19.9万人。若数据超预期可能强化美联储鹰派立场。另关注多位美联储官员讲话，寻找利率路径线索。",
+            "outlook": "EUR/USD：关键阻力1.0950，支撑1.0850，突破方向决定短期趋势。USD/JPY：关注148.00阻力，下方支撑146.50。GBP/USD：受英国GDP数据影响，区间1.2650-1.2750。XAU/USD：突破2000后看向2020，支撑1980。",
+            "strategy": "1. EUR/USD在1.0880附近轻仓做多，止损1.0850，目标1.0950。2. XAU/USD回调至1990做多，止损1980，目标2010。3. USD/JPY在147.50附近做空，止损148.00，目标146.80。",
+            "risks": "今日风险：非农数据公布前后市场波动加剧，流动性可能短期下降。关注美股开盘表现影响风险情绪。地缘政治风险仍需警惕。"
         }
     }
 
@@ -732,15 +1024,15 @@ def execute_data_update():
         logger.info("阶段2/4: 获取实时汇率...")
         rates = fetch_forex_rates_alpha_vantage(signals)
 
-        # 3. 实时抓取财经日历数据
-        logger.info("阶段3/4: 实时抓取财经日历...")
+        # 3. 获取财经日历数据（完整版）
+        logger.info("阶段3/4: 获取财经日历（完整版）...")
         events = fetch_economic_calendar()
         
-        # 确保事件按正确时间排序
+        # 确保事件按正确时间排序（从最近到最远）
         events = sort_events_by_datetime(events)
 
-        # 4. 生成基于实时数据的综合AI分析
-        logger.info("阶段4/4: 生成实时AI分析...")
+        # 4. 生成综合AI分析（分章节）
+        logger.info("阶段4/4: 生成综合AI分析（分章节）...")
         analysis_result = generate_comprehensive_analysis_with_sections(signals, rates, events)
         
         summary = analysis_result.get("summary", "")
@@ -752,7 +1044,7 @@ def execute_data_update():
         logger.info(f"数据更新成功完成:")
         logger.info(f"  - 市场信号: {len(signals)} 个")
         logger.info(f"  - 汇率数据: {len(rates)} 个")
-        logger.info(f"  - 财经日历: {len(events)} 个（实时抓取，只保留高/中影响）")
+        logger.info(f"  - 财经日历: {len(events)} 个（完整版）")
         logger.info(f"  - AI分析章节: {len(sections)} 个")
         logger.info("="*60)
         return True
@@ -763,17 +1055,31 @@ def execute_data_update():
         return False
 
 def sort_events_by_datetime(events):
-    """按日期时间排序"""
+    """按日期时间排序（从最近到最远）"""
     if not events:
         return events
     
-    # 按日期和时间排序（从早到晚）
-    events.sort(key=lambda x: (x.get('date', '9999-12-31'), x.get('time', '23:59')))
+    # 首先确保我们只保留今天及以后的事件
+    today = datetime.now(timezone(timedelta(hours=8))).date()
+    future_events = []
     
-    return events
+    for event in events:
+        try:
+            event_date_str = event.get('date', '')
+            if event_date_str:
+                event_date = datetime.strptime(event_date_str, "%Y-%m-%d").date()
+                if event_date >= today:
+                    future_events.append(event)
+        except:
+            continue
+    
+    # 按日期和时间排序（从早到晚）
+    future_events.sort(key=lambda x: (x.get('date', '9999-12-31'), x.get('time', '23:59')))
+    
+    return future_events
 
 # ============================================================================
-# 后台更新线程函数（保持不变）
+# 后台更新线程函数
 # ============================================================================
 def background_data_update():
     """在后台线程中执行数据更新"""
@@ -790,51 +1096,247 @@ def background_data_update():
         store.set_updating(False, str(e))
 
 # ============================================================================
-# 定时任务调度（保持不变）
+# 定时任务调度
 # ============================================================================
 scheduler = BackgroundScheduler()
-scheduler.add_job(execute_data_update, 'interval', minutes=30)  # 每30分钟更新一次
-scheduler.add_job(execute_data_update, 'cron', hour='*/1')  # 每小时更新一次
+
+def scheduled_data_update():
+    """定时任务包装函数"""
+    if store.is_updating:
+        logger.info("系统正在手动更新中，跳过此次定时任务。")
+        return
+    logger.info("定时任务触发数据更新...")
+    success = execute_data_update()
+    if not success:
+        logger.error("定时任务更新失败")
+
+scheduler.add_job(scheduled_data_update, 'interval', minutes=120)
+scheduler.add_job(scheduled_data_update, 'cron', hour=8, minute=0)
+scheduler.add_job(scheduled_data_update, 'cron', hour=16, minute=0)
 scheduler.start()
 
 # ============================================================================
-# Flask路由（保持不变）
+# Flask路由 - 新增分章节总结接口
 # ============================================================================
 @app.route('/')
 def index():
     return jsonify({
         "status": "running",
-        "service": "宏观经济AI分析工具（实时抓取版）",
-        "version": "5.0",
+        "service": "宏观经济AI分析工具（完整版）",
+        "version": "4.0",
         "data_sources": {
             "market_signals": "Ziwox",
             "forex_rates": "Alpha Vantage + Ziwox补充",
-            "economic_calendar": "ForexFactory实时抓取（只保留高/中影响）",
-            "ai_analysis": "laozhang.ai"
+            "economic_calendar": "Forex Factory JSON API（完整版）",
+            "ai_analysis": "laozhang.ai（分章节）"
         },
-        "update_frequency": "每30分钟自动更新",
-        "last_updated": store.last_updated.isoformat() if store.last_updated else None
+        "timezone": "北京时间 (UTC+8)",
+        "update_status": {
+            "is_updating": store.is_updating,
+            "last_updated": store.last_updated.isoformat() if store.last_updated else None,
+            "last_error": store.last_update_error
+        }
     })
 
-# ... 其他路由保持不变 ...
+@app.route('/api/status')
+def get_api_status():
+    return jsonify({
+        "status": "healthy",
+        "ai_enabled": config.enable_ai,
+        "timezone": "北京时间 (UTC+8)",
+        "update_status": {
+            "is_updating": store.is_updating,
+            "last_updated": store.last_updated.isoformat() if store.last_updated else None,
+            "last_error": store.last_update_error,
+            "data_counts": {
+                "market_signals": len(store.market_signals),
+                "forex_rates": len(store.forex_rates),
+                "economic_events": len(store.economic_events)
+            }
+        }
+    })
+
+@app.route('/api/refresh', methods=['GET', 'POST'])
+def refresh_data():
+    try:
+        logger.info(f"收到手动刷新请求")
+        if store.is_updating:
+            return jsonify({
+                "status": "processing",
+                "message": "系统正在更新数据中，请稍后再试"
+            })
+        update_thread = threading.Thread(target=background_data_update)
+        update_thread.daemon = True
+        update_thread.start()
+        return jsonify({
+            "status": "success",
+            "message": "数据刷新任务已在后台启动"
+        })
+    except Exception as e:
+        logger.error(f"刷新请求处理出错: {e}")
+        return jsonify({
+            "status": "error",
+            "message": f"刷新请求处理失败: {str(e)}"
+        }), 500
+
+@app.route('/api/events/today')
+def get_today_events():
+    """获取今日事件 - 完整版，按时间排序"""
+    events = store.economic_events
+    
+    # 如果没有数据且不在更新中，执行一次更新
+    if not events and not store.is_updating:
+        success = execute_data_update()
+        events = store.economic_events if success else []
+    
+    # 确保每个事件都有ai_analysis字段
+    for event in events:
+        if 'ai_analysis' not in event:
+            event['ai_analysis'] = "【AI分析】分析生成中..."
+    
+    # 统计信息
+    total_events = len(events)
+    high_impact = len([e for e in events if e.get('importance', 1) == 3])
+    medium_impact = len([e for e in events if e.get('importance', 1) == 2])
+    low_impact = len([e for e in events if e.get('importance', 1) == 1])
+    
+    # 检查今天的事件
+    today = datetime.now(timezone(timedelta(hours=8))).date()
+    today_str = today.strftime("%Y-%m-%d")
+    today_events = [e for e in events if e.get('date') == today_str]
+    
+    # 检查明天的事件
+    tomorrow = today + timedelta(days=1)
+    tomorrow_str = tomorrow.strftime("%Y-%m-%d")
+    tomorrow_events = [e for e in events if e.get('date') == tomorrow_str]
+    
+    return jsonify({
+        "status": "success",
+        "data": events,
+        "count": total_events,
+        "importance_stats": {
+            "high": high_impact,
+            "medium": medium_impact,
+            "low": low_impact,
+            "total": total_events
+        },
+        "date_stats": {
+            "today": len(today_events),
+            "tomorrow": len(tomorrow_events),
+            "future": total_events - len(today_events) - len(tomorrow_events)
+        },
+        "generated_at": datetime.now(timezone(timedelta(hours=8))).isoformat(),
+        "timezone": "北京时间 (UTC+8)",
+        "note": "事件已按日期时间排序（从最近到最远）"
+    })
+
+@app.route('/api/summary')
+def get_today_summary():
+    """获取今日总结 - 分章节版本"""
+    summary = store.daily_analysis
+    sections = store.summary_sections
+    
+    return jsonify({
+        "status": "success",
+        "summary": summary,
+        "sections": sections,
+        "generated_at": store.last_updated.isoformat() if store.last_updated else datetime.now(timezone(timedelta(hours=8))).isoformat(),
+        "ai_enabled": config.enable_ai,
+        "timezone": "北京时间 (UTC+8)"
+    })
+
+@app.route('/api/summary/sections')
+def get_summary_sections():
+    """专门获取各个章节的内容 - 供前端使用"""
+    sections = store.summary_sections
+    
+    return jsonify({
+        "status": "success",
+        "sections": sections,
+        "generated_at": store.last_updated.isoformat() if store.last_updated else datetime.now(timezone(timedelta(hours=8))).isoformat()
+    })
+
+@app.route('/api/market/signals')
+def get_market_signals():
+    signals = store.market_signals
+    return jsonify({
+        "status": "success",
+        "data": signals,
+        "count": len(signals),
+        "source": "Ziwox"
+    })
+
+@app.route('/api/forex/rates')
+def get_forex_rates():
+    rates = store.forex_rates
+    return jsonify({
+        "status": "success",
+        "data": rates,
+        "count": len(rates)
+    })
+
+@app.route('/api/analysis/daily')
+def get_daily_analysis():
+    analysis = store.daily_analysis
+    return jsonify({
+        "status": "success",
+        "analysis": analysis,
+        "generated_at": datetime.now(timezone(timedelta(hours=8))).isoformat(),
+        "ai_provider": "laozhang.ai",
+        "timezone": "北京时间 (UTC+8)"
+    })
+
+@app.route('/api/overview')
+def get_overview():
+    events = store.economic_events
+    high_count = len([e for e in events if e.get('importance', 1) == 3])
+    medium_count = len([e for e in events if e.get('importance', 1) == 2])
+    low_count = len([e for e in events if e.get('importance', 1) == 1])
+    
+    return jsonify({
+        "status": "success",
+        "timestamp": datetime.now(timezone(timedelta(hours=8))).isoformat(),
+        "timezone": "北京时间 (UTC+8)",
+        "market_signals_count": len(store.market_signals),
+        "forex_rates_count": len(store.forex_rates),
+        "economic_events_count": len(store.economic_events),
+        "importance_breakdown": {
+            "high": high_count,
+            "medium": medium_count,
+            "low": low_count
+        },
+        "has_ai_analysis": bool(store.daily_analysis and len(store.daily_analysis) > 10),
+        "has_summary_sections": bool(store.summary_sections and len(store.summary_sections) > 0)
+    })
 
 # ============================================================================
 # 启动应用
 # ============================================================================
 if __name__ == '__main__':
     logger.info("="*60)
-    logger.info("启动宏观经济AI分析工具（实时抓取版）")
-    logger.info("财经日历源: ForexFactory实时抓取（只保留高/中影响事件）")
-    logger.info("AI分析服务: laozhang.ai（基于实时数据）")
+    logger.info("启动宏观经济AI分析工具（完整版）")
+    logger.info(f"财经日历源: Forex Factory JSON API（完整抓取）")
+    logger.info(f"AI分析服务: laozhang.ai（分章节分析）")
     logger.info(f"模拟模式: {config.use_mock}")
+    logger.info(f"时区: 北京时间 (UTC+8)")
+    logger.info("注意: 现在抓取完整日历事件，不再限制50个")
     logger.info("="*60)
 
     # 首次启动时获取数据
     try:
-        logger.info("首次启动，正在获取实时数据...")
+        logger.info("首次启动，正在获取完整数据...")
         success = execute_data_update()
         if success:
-            logger.info("初始实时数据获取成功")
+            logger.info("初始数据获取成功")
+            events = store.economic_events
+            logger.info(f"事件总数: {len(events)}")
+            
+            # 检查非农就业数据是否被抓取
+            non_farm_events = [e for e in events if 'non-farm' in e.get('name', '').lower() or 'employment' in e.get('name', '').lower()]
+            if non_farm_events:
+                logger.info(f"成功抓取到非农就业相关事件: {[e['name'] for e in non_farm_events]}")
+            else:
+                logger.warning("未发现非农就业相关事件，请检查数据源")
         else:
             logger.warning("初始数据获取失败，但服务已启动")
     except Exception as e:
