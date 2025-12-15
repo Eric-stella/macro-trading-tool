@@ -1,0 +1,371 @@
+Metadata-Version: 2.1
+Name: market-calendar-tool
+Version: 0.2.2
+Summary: Market Calendar Tool is a Python package that scrapes economic calendar data from multiple financial websites and returns it as pandas DataFrames for easy analysis.
+License: MIT
+Author: Pavel Krusek
+Author-email: pavel@krusek.dk
+Requires-Python: >=3.12,<4.0
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.12
+Classifier: Programming Language :: Python :: 3.13
+Requires-Dist: aiohttp (>=3.10.10,<4.0.0)
+Requires-Dist: asyncio (>=3.4.3,<4.0.0)
+Requires-Dist: beautifulsoup4 (>=4.12.3,<5.0.0)
+Requires-Dist: loguru (>=0.7.2,<0.8.0)
+Requires-Dist: pandas (>=2.2.3,<3.0.0)
+Requires-Dist: pyarrow (>=17.0.0,<18.0.0)
+Requires-Dist: pycountry (>=24.6.1,<25.0.0)
+Requires-Dist: requests (>=2.32.3,<3.0.0)
+Description-Content-Type: text/markdown
+
+# Market Calendar Tool
+
+A Python package for scraping economic calendar data from various financial websites.
+
+## Legal Notice
+
+Please note that scraping data from websites must comply with the site's terms of service and legal requirements. The robots.txt files of the supported sites do not explicitly restrict scraping, but users should ensure they comply with local regulations and the website's terms.
+
+## Features
+
+- **Multi-Site Support**: Scrape data from multiple sites:
+  - [ForexFactory](https://www.forexfactory.com/calendar)
+  - [MetalsMine](https://www.metalsmine.com/calendar)
+  - [EnergyExch](https://www.energyexch.com/calendar)
+  - [CryptoCraft](https://www.cryptocraft.com/calendar)
+
+- **Flexible Date Range**: Specify custom date ranges for scraping.
+- **Extended Data Retrieval**: Option to retrieve extended data for each event.
+- **Configurable Concurrency**: Use `ScrapeOptions` to configure the number of concurrent asyncio tasks (`max_parallel_tasks`), optimizing scraping performance based on system capabilities.
+- **Easy-to-Use API**: Simple and intuitive function to get you started quickly.
+- **DataFrame Output**: Returns raw data scraped from the website as *pandas* DataFrame(s) for further processing.
+- **Data Handling**: Always returns scraped data encapsulated in a `ScrapeResult` object for consistent data management.
+- **Data Cleaning and Validation**: Provides functionality to clean and validate scraped data for further processing, ensuring data quality and consistency.
+- **Data Saving with Metadata**: Automatically saves scraped data with file names that include the site name, date range, and scrape timestamp, ensuring clarity and uniqueness.
+- **Skip Empty DataFrames**: Automatically skips saving any empty DataFrames, preventing unnecessary files from being created.
+- **Serialization Support**: Supports serialization of `ScrapeResult` objects using the `pickle` module, allowing for easy storage and retrieval of scraped data.
+
+### Implemented Features
+
+- [x] Economic Calendar Scraping with Multi-Site Support
+  - [x] ForexFactory
+  - [x] MetalsMine
+  - [x] EnergyExch
+  - [x] CryptoCraft
+- [x] Flexible Date Range Configuration
+- [x] Extended Data Retrieval
+- [x] Configurable Concurrency
+- [x] DataFrame Output
+- [x] Data Cleaning and Validation
+- [x] DataFrame Saving with Metadata (CSV, parquet)
+- [x] Serialization Support (pickle)
+
+### Planned Features
+
+- [ ] Data Preprocessing for Vector Database (FAISS)
+- [ ] LangChain Tool Integration
+  - [ ] Custom Tool Implementation
+  - [ ] Flow Integration Support
+
+## Installation
+
+Install the package via pip:
+
+```bash
+pip install market-calendar-tool
+```
+
+## Requirements
+
+- **Python Version**: Python **3.12** or higher is required.
+- **Dependencies**:
+
+| Dependency | Version |
+|------------|---------|
+| loguru     | ^0.7.2  |
+| requests   | ^2.32.3 |
+| pandas     | ^2.2.3  |
+| asyncio    | ^3.4.3  |
+| aiohttp    | ^3.10.10 |
+| pyarrow    | ^17.0.0 |
+| pycountry  | ^24.6.1 |
+| beautifulsoup4 | ^4.12.3 |
+
+## Usage
+
+Import the package and use the `scrape_calendar` function with optional `ScrapeOptions` for advanced configurations.
+
+```python
+from market_calendar_tool import scrape_calendar, clean_calendar_data, Site, ScrapeOptions
+
+# Stage 1: Scrape raw data from today to one week ahead from ForexFactory
+raw_data = scrape_calendar()
+
+# Stage 2: Clean the data
+cleaned_data = clean_calendar_data(raw_data)
+
+# Specify a different site
+raw_data = scrape_calendar(site=Site.METALSMINE)
+cleaned_data = clean_calendar_data(raw_data)
+
+# Specify date range
+raw_data = scrape_calendar(date_from="2024-01-01", date_to="2024-01-07")
+cleaned_data = clean_calendar_data(raw_data)
+
+# Retrieve extended data
+result = scrape_calendar(extended=True)
+print(result.base)     # Basic event data
+print(result.specs)    # Event specifications
+print(result.history)  # Historical data
+print(result.news)     # Related news articles
+
+# Advanced usage: configure asyncio task concurrency
+custom_options = ScrapeOptions(max_parallel_tasks=10)
+raw_data = scrape_calendar(options=custom_options)
+cleaned_data = clean_calendar_data(raw_data)
+
+# Save the scraped data as DataFrames with metadata in the file names to a specific directory
+result.save_to_dataframes(output_dir="output_data")
+
+# Save the entire ScrapeResult object to a pickle file
+result.save(output_dir="output_data")  # Filename autogenerated, e.g., scrape_result_20241028173859.pickle
+
+# Load the latest ScrapeResult object from the current directory
+loaded_result = ScrapeResult.load()
+print(loaded_result)
+```
+
+## Parameters
+
+- `site` (optional): The website to scrape data from. Default is `Site.FOREXFACTORY`.
+  - Options:
+    - `Site.FOREXFACTORY`
+    - `Site.METALSMINE`
+    - `Site.ENERGYEXCH`
+    - `Site.CRYPTOCRAFT`
+- `date_from` (optional): Start date in "YYYY-MM-DD" format.
+- `date_to` (optional): End date in "YYYY-MM-DD" format.
+- `extended` (optional): Boolean flag to retrieve extended data. Default is `False`.
+- `options` (optional): An instance of `ScrapeOptions` to configure advanced scraping settings.
+
+## Return Values
+
+`scrape_calendar`: Always returns a `ScrapeResult` object containing the raw scraped data.
+`clean_calendar_data`: Returns a `ScrapeResult` object containing the cleaned data.
+
+## API Reference
+
+### `scrape_calendar`
+
+Function to scrape raw calendar data from the specified site within the given date range.
+
+**Signature:**
+
+```python
+def scrape_calendar(
+    site: Site = Site.FOREXFACTORY,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    extended: bool = False,
+    options: Optional[ScrapeOptions] = None,
+) -> ScrapeResult:
+    ...
+```
+
+**Parameters**:
+
+- `site` (Site): The target site to scrape. Defaults to `Site.FOREXFACTORY`.
+- `date_from` (Optional[str]): The start date for scraping in 'YYYY-MM-DD' format.
+- `date_to` (Optional[str]): The end date for scraping in 'YYYY-MM-DD' format.
+- `extended` (bool): Whether to perform extended scraping. Defaults to `False`.
+- `options` (Optional[ScrapeOptions]): Additional scraping configurations.
+
+**Returns**:
+
+- `ScrapeResult`: The raw scraped data encapsulated in a ScrapeResult object.
+
+### `clean_calendar_data`
+
+Function to clean the scraped calendar data.
+
+**Signature**:
+
+```python
+def clean_calendar_data(scrape_result: ScrapeResult) -> ScrapeResult:
+    ...
+```
+
+**Parameters**:
+
+- `scrape_result` (`ScrapeResult`): The raw scraped data to be cleaned.
+
+**Returns**:
+
+- `ScrapeResult`: The cleaned data encapsulated in a `ScrapeResult` object.
+
+### `Site` Enum
+
+Enumeration of supported websites.
+
+- `Site.FOREXFACTORY`
+- `Site.METALSMINE`
+- `Site.ENERGYEXCH`
+- `Site.CRYPTOCRAFT`
+
+### `ScrapeOptions` Data Class
+
+Contains configurable options for scraping.
+
+**Attributes**:
+
+- `max_parallel_tasks` (`int`): The maximum number of concurrent asyncio tasks. Default is `5`.
+
+**Example**:
+
+```python
+from market_calendar_tool import ScrapeOptions
+
+# Create custom options with increased concurrency
+custom_options = ScrapeOptions(max_parallel_tasks=10)
+```
+
+### `ScrapeResult` Data Class
+
+Contains extended data when `extended=True`.
+
+- `site` (`Site`): The website from which the data was scraped.
+- `date_from` (`str`): The start date of the scraped data range in "YYYY-MM-DD" format.
+- `date_to` (`str`): The end date of the scraped data range in "YYYY-MM-DD" format.
+- `scraped_at` (`float`): UNIX timestamp indicating when the scraping occurred.
+- `base` (`pd.DataFrame`): Basic event data.
+- `specs` (`pd.DataFrame`): Event specifications.
+- `history` (`pd.DataFrame`): Historical data.
+- `news` (`pd.DataFrame`): Related news articles.
+
+### `save_to_dataframes`
+
+Overrides the `save_to_dataframes` method to include site name, date range, and scrape timestamp in the file prefix. Also skips saving empty DataFrames.
+
+**Signature**:
+
+```python
+def save_to_dataframes(
+    self,
+    save_format: SaveFormat = SaveFormat.PARQUET,
+    output_dir: Optional[str] = None
+) -> None:
+    ...
+```
+
+**Parameters**:
+
+- `save_format` (`SaveFormat`, optional): The format to save files in. Defaults to `SaveFormat.PARQUET`.
+- `output_dir` (`Optional[str]`, optional): The directory to save files to. Defaults to the current working directory.
+
+**Behavior**:
+
+- Constructs a `file_prefix` that includes the `site` name, `date_from`, `date_to`, and a formatted `scraped_at` timestamp.
+- Saves only non-empty DataFrame attributes (`base`, `specs`, `history`, `news`) with the constructed prefix.
+- Skips any empty DataFrames, avoiding the creation of unnecessary files.
+
+**Example**:
+
+```python
+# Save the scraped data with metadata in the file names
+result.save(output_dir="desired/output/path")
+```
+
+### `save`
+
+Serializes and saves the entire ScrapeResult object to a pickle file. If file_name is not provided, it generates one based on the scraped_at timestamp.
+
+**Signature**:
+
+```python
+def save(
+    self,
+    output_dir: Optional[str] = None,
+) -> None:
+    ...
+```
+
+**Parameters**:
+
+- `output_dir` (`Optional[str]`, optional): The directory to save the pickle file. Defaults to the current working directory.
+
+**Behavior**:
+
+- Constructs a filename in the format `scrape_result_YYYYMMDDHHMMSS.pickle` based on the `scraped_at` timestamp.
+- Saves the entire `ScrapeResult` object as a pickle file in the specified directory.
+
+**Example**:
+
+```python
+# Save the entire ScrapeResult object using pickle with an autogenerated filename
+result.save(output_dir="output_data")
+```
+
+### `load`
+
+Class method to load a `ScrapeResult` object from a pickle file. If `file_path` is not provided, it automatically loads the latest `scrape_result_YYYYMMDDHHMMSS.pickle` file from the current directory.
+
+**Signature**:
+
+```python
+@classmethod
+def load(cls, file_path: Optional[str] = None) -> "ScrapeResult":
+    ...
+```
+
+**Parameters**:
+
+- `file_path` (`Optional[str]`): Path to the pickle file. If None, the method searches for the latest pickle file in the current directory.
+
+**Returns**:
+
+- `ScrapeResult`: The deserialized `ScrapeResult` object.
+
+**Example**:
+
+```python
+# Load the latest ScrapeResult object from the current directory
+loaded_result = ScrapeResult.load()
+print(loaded_result)
+
+# Or load a specific pickle file
+loaded_specific = ScrapeResult.load(file_path="output_data/scrape_result_20241028173859.pickle")
+print(loaded_specific)
+```
+
+## Configuration
+
+### `ScrapeOptions`
+
+The `ScrapeOptions` dataclass allows you to configure advanced scraping settings.
+
+**Parameters**:
+
+- `max_parallel_tasks` (`int`, `optional`): The number of concurrent asyncio tasks to run. Increasing this number can speed up the scraping process but may lead to higher resource usage. Default is `5`.
+
+**Usage Example**:
+
+```python
+from market_calendar_tool import scrape_calendar, ScrapeOptions
+
+# Configure scraper to use 10 parallel asyncio tasks
+options = ScrapeOptions(max_parallel_tasks=10)
+result = scrape_calendar(extended=True, options=options)
+```
+
+## Contributing
+
+Contributions are welcome! Please open an issue or submit a pull request on GitHub.
+
+## License
+
+This project is licensed under the MIT License - see the LICENSE file for details.
+
+Feel free to customize this package to better suit your project's needs!
+
