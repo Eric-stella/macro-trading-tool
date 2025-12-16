@@ -44,7 +44,7 @@ class Config:
         self.use_mock = os.getenv("USE_MOCK_DATA", "false").lower() == "true"
         self.enable_ai = os.getenv("ENABLE_AI", "true").lower() == "true"
 
-        # 监控的货币对
+        # 监控的货币对 - 增加黄金、白银、比特币
         self.watch_currency_pairs = [
             'EURUSD', 'GBPUSD', 'USDCHF', 'USDCNH',
             'USDJPY', 'AUDUSD', 'XAUUSD', 'XAGUSD', 'BTCUSD'
@@ -82,7 +82,6 @@ class DataStore:
             "market": "",
             "events": "",
             "outlook": "",
-            "strategy": "",
             "risks": ""
         }
 
@@ -749,7 +748,7 @@ def add_ai_analysis_to_events(events):
     return events
 
 # ============================================================================
-# 模块4：AI综合分析生成 (laozhang.ai)
+# 模块4：AI综合分析生成 (laozhang.ai) - 修复self错误并加入实时数据
 # ============================================================================
 def generate_ai_analysis_for_event(event):
     """为单个事件生成AI分析"""
@@ -816,95 +815,120 @@ def generate_ai_analysis_for_event(event):
     return "【AI分析】分析生成中..."
 
 def generate_comprehensive_analysis_with_sections(signals, rates, events):
-    """生成基于实时数据的综合AI分析"""
+    """生成综合AI分析，并分章节"""
     if not config.enable_ai:
-        return get_default_analysis_sections()
+        logger.info("AI分析功能已被禁用")
+        return {
+            "summary": "【AI分析】AI分析功能当前已禁用。",
+            "sections": {
+                "market": "市场分析功能当前已禁用。",
+                "events": "事件分析功能当前已禁用。",
+                "outlook": "展望功能当前已禁用。",
+                "risks": "风险提示功能当前已禁用。"
+            }
+        }
+    
+    api_key = config.openai_api_key.strip()
+    if not api_key or len(api_key) < 30:
+        logger.error("laozhang.ai API密钥无效或过短")
+        return {
+            "summary": "【AI分析】错误：API密钥配置无效。",
+            "sections": {
+                "market": "API密钥配置无效。",
+                "events": "API密钥配置无效。",
+                "outlook": "API密钥配置无效。",
+                "risks": "API密钥配置无效。"
+            }
+        }
+    
+    logger.info("开始生成综合AI分析（分章节）...")
     
     try:
-        # 提取最新的实时价格数据
-        real_time_prices = {}
-        for signal in signals:
+        # 重要事件统计
+        important_events = [e for e in events if e.get('importance', 1) >= 2]
+        event_names = [e.get('name', '') for e in important_events[:5]]
+        
+        # 市场数据摘要 - 特别关注黄金、白银、比特币
+        market_data = []
+        special_pairs = ['XAUUSD', 'XAGUSD', 'BTCUSD']
+        
+        # 先添加特殊品种
+        for pair in special_pairs:
+            signal = next((s for s in signals if s.get('pair') == pair), None)
+            rate = rates.get(pair, {}).get('rate', 'N/A') if rates else 'N/A'
+            if signal:
+                market_data.append(f"{pair}: {rate}")
+        
+        # 添加其他主要货币对
+        for i, signal in enumerate(signals[:3]):
             pair = signal.get('pair', '')
-            price = signal.get('last_price', 0)
-            if pair and price:
-                real_time_prices[pair] = price
+            if pair not in special_pairs:
+                rate = rates.get(pair, {}).get('rate', 'N/A') if rates else 'N/A'
+                market_data.append(f"{pair}: {rate}")
         
-        # 构建包含实时数据的提示词
-        prompt = self.build_real_time_analysis_prompt(real_time_prices, rates, events)
-        ai_response = self.call_ai_api(prompt)
-        
-        # 解析AI回复
-        sections = self.parse_ai_response(ai_response)
-        
-        # 确保货币对展望包含实时价格
-        sections['outlook'] = self.enhance_outlook_with_real_prices(sections.get('outlook', ''), real_time_prices)
-        
-        return {
-            "summary": "基于实时数据的AI分析报告",
-            "sections": sections
-        }
-        
-    except Exception as e:
-        logger.error(f"生成实时分析失败: {e}")
-        return get_default_analysis_sections()
-
-def build_real_time_analysis_prompt(self, real_time_prices, rates, events):
-    """构建包含实时数据的提示词"""
-    
-    # 格式化实时价格
-    price_info = []
-    for pair, price in real_time_prices.items():
-        if price and price > 0:
-            price_info.append(f"{pair}: {price}")
-    
-    # 提取重要事件
-    important_events = [e for e in events if e.get('importance', 1) >= 2][:5]
-    event_info = []
-    for event in important_events:
-        event_info.append(f"- {event['time']} {event['country']} {event['name']}")
-    
-    prompt = f"""作为专业外汇分析师，请基于以下实时数据生成分析：
+        # 构建提示词，要求分章节生成，特别关注贵金属和加密货币
+        prompt = f"""你是一位专业的宏观外汇策略分析师。请基于以下实时数据，生成一份结构化的今日外汇市场分析报告。
 
 【实时市场价格】
-{chr(10).join(price_info) if price_info else "暂无实时价格数据"}
+{chr(10).join(market_data) if market_data else "暂无实时市场数据"}
 
-【重要事件（北京时间）】
-{chr(10).join(event_info) if event_info else "今日无重要事件"}
+【本周重要经济事件】
+{chr(10).join([f"- {name}" for name in event_names]) if event_names else "本周无重要经济事件"}
 
-请提供以下分析，务必基于上述实时价格数据：
+【分析要求】
+请按以下章节结构组织分析，每个章节单独成段：
 
-1. 市场概况：基于当前价格水平的市场整体状况
-2. 事件分析：对重要经济事件的影响评估
-3. 货币对展望：对主要货币对（EUR/USD, USD/JPY, GBP/USD, XAU/USD等）的技术分析，必须引用上述实时价格
-4. 风险提示：当前市场主要风险
+1. 市场概况（market）：基于当前价格水平的市场整体状况和主要特征
+2. 事件分析（events）：对本周重要经济事件的分析和预期，特别是对黄金(XAU/USD)、白银(XAG/USD)、比特币(BTC/USD)的影响
+3. 货币对展望（outlook）：主要货币对（EUR/USD, USD/JPY, GBP/USD, AUD/USD）和贵金属/加密货币（XAU/USD, XAG/USD, BTC/USD）的技术分析和关键位，必须基于上述实时价格
+4. 风险提示（risks）：今日交易的主要风险和注意事项
 
-请确保：
-- 所有价格分析都基于提供的实时数据
-- 对黄金（XAU/USD）的分析要准确反映当前价格水平
-- 给出具体的支撑位和阻力位
-- 使用中文，每个部分150-200字"""
+每个章节请控制在150-200字，使用中文，简洁专业。
+特别要求：对黄金、白银、比特币的分析必须准确反映当前价格水平。"""
 
-    return prompt
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json"
+        }
+        
+        request_body = {
+            "model": "gpt-4",
+            "messages": [
+                {"role": "system", "content": "你是一位经验丰富的外汇和贵金属交易员，擅长基于实时数据给出结构化、清晰、可执行的交易分析。"},
+                {"role": "user", "content": prompt}
+            ],
+            "max_tokens": 1500,
+            "temperature": 0.4
+        }
 
-def enhance_outlook_with_real_prices(self, outlook_text, real_time_prices):
-    """增强货币对展望部分，确保包含实时价格"""
-    if not outlook_text:
-        return outlook_text
+        response = requests.post(
+            f"{config.openai_base_url}/chat/completions",
+            headers=headers,
+            json=request_body,
+            timeout=60
+        )
+
+        if response.status_code == 200:
+            result = response.json()
+            if 'choices' in result and len(result['choices']) > 0:
+                ai_content = result['choices'][0]['message']['content']
+                
+                # 解析AI回复，分章节
+                sections = parse_ai_response_into_sections(ai_content)
+                
+                # 确保货币对展望包含实时价格
+                sections = enhance_sections_with_real_data(sections, signals, rates)
+                
+                return {
+                    "summary": "基于实时数据的AI分析报告已生成",
+                    "sections": sections
+                }
+                
+    except Exception as e:
+        logger.error(f"生成综合AI分析时出错: {e}")
     
-    # 检查是否已经提到实时价格
-    price_mentioned = False
-    for pair in ['XAU/USD', 'XAUUSD', '黄金', 'GOLD']:
-        if pair.lower() in outlook_text.lower():
-            price_mentioned = True
-            break
-    
-    # 如果没有提到实时价格，添加说明
-    if not price_mentioned:
-        gold_price = real_time_prices.get('XAUUSD') or real_time_prices.get('XAU/USD')
-        if gold_price:
-            outlook_text += f"\n\n（注：当前黄金现货价格约{gold_price}，分析基于实时行情数据）"
-    
-    return outlook_text
+    # 失败时返回默认数据
+    return get_default_analysis_sections()
 
 def parse_ai_response_into_sections(ai_content):
     """解析AI回复，分章节提取内容"""
@@ -912,7 +936,6 @@ def parse_ai_response_into_sections(ai_content):
         "market": "等待AI分析生成...",
         "events": "等待AI分析生成...",
         "outlook": "等待AI分析生成...",
-        "strategy": "等待AI分析生成...",
         "risks": "等待AI分析生成..."
     }
     
@@ -943,11 +966,6 @@ def parse_ai_response_into_sections(ai_content):
                 sections[current_section] = ' '.join(current_content)
             current_section = "outlook"
             current_content = []
-        elif "交易策略" in line or "交易策略（strategy）" in line:
-            if current_section and current_content:
-                sections[current_section] = ' '.join(current_content)
-            current_section = "strategy"
-            current_content = []
         elif "风险提示" in line or "风险提示（risks）" in line:
             if current_section and current_content:
                 sections[current_section] = ' '.join(current_content)
@@ -962,31 +980,47 @@ def parse_ai_response_into_sections(ai_content):
     
     return sections
 
-def generate_summary_from_sections(sections):
-    """从各个章节生成总结"""
-    summary_parts = []
+def enhance_sections_with_real_data(sections, signals, rates):
+    """用实时数据增强分析章节"""
+    # 获取实时价格
+    real_time_prices = {}
+    for signal in signals:
+        pair = signal.get('pair', '')
+        price = signal.get('last_price', 0)
+        if pair and price > 0:
+            real_time_prices[pair] = price
     
-    if sections.get("market"):
-        summary_parts.append(sections["market"][:100] + "...")
+    # 在货币对展望中添加实时数据说明
+    if sections.get('outlook'):
+        outlook = sections['outlook']
+        
+        # 检查是否包含实时价格
+        price_mentioned = False
+        for pair, price in real_time_prices.items():
+            if str(price) in outlook:
+                price_mentioned = True
+                break
+        
+        if not price_mentioned and real_time_prices:
+            price_summary = []
+            for pair in ['XAUUSD', 'XAGUSD', 'BTCUSD', 'EURUSD']:
+                if pair in real_time_prices:
+                    price_summary.append(f"{pair}: {real_time_prices[pair]}")
+            
+            if price_summary:
+                sections['outlook'] = outlook + f"\n\n（基于实时价格：{', '.join(price_summary)}）"
     
-    if sections.get("strategy"):
-        summary_parts.append("策略要点：" + sections["strategy"][:80] + "...")
-    
-    if summary_parts:
-        return "【AI分析】" + " ".join(summary_parts)
-    else:
-        return "【AI分析】今日市场相对平静，关注欧美经济数据发布。建议谨慎交易，控制风险。"
+    return sections
 
 def get_default_analysis_sections():
     """获取默认的分析章节"""
     return {
-        "summary": "【AI分析】今日市场关注美国非农就业数据和美联储官员讲话。美元指数在104.50附近震荡，黄金突破2000关口。建议轻仓操作，严格止损。",
+        "summary": "【AI分析】基于实时数据生成分析中...",
         "sections": {
-            "market": "今日市场整体呈现震荡格局，美元指数在104.00-105.00区间波动。欧洲央行会议纪要显示委员对通胀仍持谨慎态度，欧元承压。亚洲股市普遍上涨，风险情绪有所改善。",
-            "events": "本周重点关注美国非农就业数据，预期18万人，前值19.9万人。若数据超预期可能强化美联储鹰派立场。另关注多位美联储官员讲话，寻找利率路径线索。",
-            "outlook": "EUR/USD：关键阻力1.0950，支撑1.0850，突破方向决定短期趋势。USD/JPY：关注148.00阻力，下方支撑146.50。GBP/USD：受英国GDP数据影响，区间1.2650-1.2750。XAU/USD：突破2000后看向2020，支撑1980。",
-            "strategy": "1. EUR/USD在1.0880附近轻仓做多，止损1.0850，目标1.0950。2. XAU/USD回调至1990做多，止损1980，目标2010。3. USD/JPY在147.50附近做空，止损148.00，目标146.80。",
-            "risks": "今日风险：非农数据公布前后市场波动加剧，流动性可能短期下降。关注美股开盘表现影响风险情绪。地缘政治风险仍需警惕。"
+            "market": "正在分析实时市场数据...",
+            "events": "正在分析实时经济事件...",
+            "outlook": "正在生成货币对展望...",
+            "risks": "正在评估交易风险..."
         }
     }
 
@@ -994,39 +1028,53 @@ def get_default_analysis_sections():
 # 核心数据更新函数
 # ============================================================================
 def execute_data_update():
-    """执行数据更新的核心逻辑，确保获取实时价格"""
+    """执行数据更新的核心逻辑"""
     try:
-        logger.info("开始执行实时数据更新...")
+        logger.info("="*60)
+        logger.info(f"开始执行数据更新: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
-        # 1. 获取市场信号数据（包含实时价格）
+        # 1. 获取市场信号数据
+        logger.info("阶段1/4: 获取市场信号...")
         signals = fetch_market_signals_ziwox()
         
         # 记录获取到的实时价格
         for signal in signals:
             pair = signal.get('pair', '')
             price = signal.get('last_price', 0)
-            if pair and price:
-                logger.info(f"实时价格: {pair} = {price}")
+            if pair and price > 0:
+                logger.info(f"  实时价格: {pair} = {price}")
 
         # 2. 获取实时汇率数据
+        logger.info("阶段2/4: 获取实时汇率...")
         rates = fetch_forex_rates_alpha_vantage(signals)
 
-        # 3. 获取财经日历数据
+        # 3. 获取财经日历数据（完整版）
+        logger.info("阶段3/4: 获取财经日历（完整版）...")
         events = fetch_economic_calendar()
         
-        # 4. 生成基于实时数据的AI分析
+        # 确保事件按正确时间排序
+        events = sort_events_by_datetime(events)
+
+        # 4. 生成综合AI分析（分章节）
+        logger.info("阶段4/4: 生成综合AI分析（分章节）...")
         analysis_result = generate_comprehensive_analysis_with_sections(signals, rates, events)
         
-        # 存储数据
-        store.update_all(signals, rates, events, 
-                        analysis_result.get("summary", ""), 
-                        analysis_result.get("sections", {}))
+        sections = analysis_result.get("sections", {})
 
-        logger.info(f"实时数据更新完成，获取到 {len(signals)} 个市场信号")
+        # 5. 存储数据
+        store.update_all(signals, rates, events, "实时AI分析报告", sections)
+
+        logger.info(f"数据更新成功完成:")
+        logger.info(f"  - 市场信号: {len(signals)} 个")
+        logger.info(f"  - 汇率数据: {len(rates)} 个")
+        logger.info(f"  - 财经日历: {len(events)} 个（完整版）")
+        logger.info(f"  - AI分析章节: {len(sections)} 个")
+        logger.info("="*60)
         return True
 
     except Exception as e:
-        logger.error(f"数据更新失败: {str(e)}")
+        logger.error(f"数据更新失败: {str(e)}", exc_info=True)
+        store.set_updating(False, str(e))
         return False
 
 def sort_events_by_datetime(events):
@@ -1085,26 +1133,27 @@ def scheduled_data_update():
     if not success:
         logger.error("定时任务更新失败")
 
-scheduler.add_job(scheduled_data_update, 'interval', minutes=120)
+scheduler.add_job(scheduled_data_update, 'interval', minutes=30)
 scheduler.add_job(scheduled_data_update, 'cron', hour=8, minute=0)
 scheduler.add_job(scheduled_data_update, 'cron', hour=16, minute=0)
 scheduler.start()
 
 # ============================================================================
-# Flask路由 - 新增分章节总结接口
+# Flask路由 - 修复分章节总结接口
 # ============================================================================
 @app.route('/')
 def index():
     return jsonify({
         "status": "running",
-        "service": "宏观经济AI分析工具（完整版）",
-        "version": "4.0",
+        "service": "宏观经济AI分析工具（实时版）",
+        "version": "5.1",
         "data_sources": {
             "market_signals": "Ziwox",
             "forex_rates": "Alpha Vantage + Ziwox补充",
             "economic_calendar": "Forex Factory JSON API（完整版）",
-            "ai_analysis": "laozhang.ai（分章节）"
+            "ai_analysis": "laozhang.ai（实时数据版）"
         },
+        "special_pairs": ["XAU/USD (黄金)", "XAG/USD (白银)", "BTC/USD (比特币)"],
         "timezone": "北京时间 (UTC+8)",
         "update_status": {
             "is_updating": store.is_updating,
@@ -1208,12 +1257,11 @@ def get_today_events():
 @app.route('/api/summary')
 def get_today_summary():
     """获取今日总结 - 分章节版本"""
-    summary = store.daily_analysis
     sections = store.summary_sections
     
     return jsonify({
         "status": "success",
-        "summary": summary,
+        "summary": "基于实时数据的AI分析报告",
         "sections": sections,
         "generated_at": store.last_updated.isoformat() if store.last_updated else datetime.now(timezone(timedelta(hours=8))).isoformat(),
         "ai_enabled": config.enable_ai,
@@ -1238,7 +1286,12 @@ def get_market_signals():
         "status": "success",
         "data": signals,
         "count": len(signals),
-        "source": "Ziwox"
+        "source": "Ziwox",
+        "special_pairs": [
+            {"pair": "XAUUSD", "name": "黄金/美元", "type": "贵金属"},
+            {"pair": "XAGUSD", "name": "白银/美元", "type": "贵金属"},
+            {"pair": "BTCUSD", "name": "比特币/美元", "type": "加密货币"}
+        ]
     })
 
 @app.route('/api/forex/rates')
@@ -1289,20 +1342,21 @@ def get_overview():
 # ============================================================================
 if __name__ == '__main__':
     logger.info("="*60)
-    logger.info("启动宏观经济AI分析工具（完整版）")
-    logger.info(f"财经日历源: Forex Factory JSON API（完整抓取）")
-    logger.info(f"AI分析服务: laozhang.ai（分章节分析）")
+    logger.info("启动宏观经济AI分析工具（实时数据版）")
+    logger.info(f"财经日历源: Forex Factory JSON API")
+    logger.info(f"AI分析服务: laozhang.ai（实时数据版）")
+    logger.info(f"特殊品种: XAU/USD (黄金), XAG/USD (白银), BTC/USD (比特币)")
     logger.info(f"模拟模式: {config.use_mock}")
     logger.info(f"时区: 北京时间 (UTC+8)")
-    logger.info("注意: 现在抓取完整日历事件，不再限制50个")
+    logger.info("注意: AI分析将基于实时价格数据生成")
     logger.info("="*60)
 
     # 首次启动时获取数据
     try:
-        logger.info("首次启动，正在获取完整数据...")
+        logger.info("首次启动，正在获取实时数据...")
         success = execute_data_update()
         if success:
-            logger.info("初始数据获取成功")
+            logger.info("初始实时数据获取成功")
             events = store.economic_events
             logger.info(f"事件总数: {len(events)}")
             
