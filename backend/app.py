@@ -84,8 +84,9 @@ class DataStore:
             "outlook": "",
             "risks": ""
         }
+        self.currency_pairs_summary = []  # 货币对摘要信息
 
-    def update_all(self, signals, rates, events, analysis, summary_sections=None, individual_analysis=None):
+    def update_all(self, signals, rates, events, analysis, summary_sections=None, individual_analysis=None, currency_pairs_summary=None):
         self.market_signals = signals
         self.forex_rates = rates
         self.economic_events = events
@@ -94,6 +95,8 @@ class DataStore:
             self.summary_sections = summary_sections
         if individual_analysis:
             self.individual_ai_analysis = individual_analysis
+        if currency_pairs_summary:
+            self.currency_pairs_summary = currency_pairs_summary
         self.last_updated = datetime.now()
         self.is_updating = False
         self.last_update_error = None
@@ -1025,6 +1028,78 @@ def get_default_analysis_sections():
     }
 
 # ============================================================================
+# 新增：货币对摘要生成函数
+# ============================================================================
+def generate_currency_pairs_summary(signals, rates):
+    """生成货币对摘要信息，用于前端展示"""
+    currency_pairs_summary = []
+    
+    # 定义货币对显示名称和图标
+    pair_display_info = {
+        'EURUSD': {'name': '欧元/美元', 'icon': '🇪🇺🇺🇸'},
+        'GBPUSD': {'name': '英镑/美元', 'icon': '🇬🇧🇺🇸'},
+        'USDJPY': {'name': '美元/日元', 'icon': '🇺🇸🇯🇵'},
+        'USDCHF': {'name': '美元/瑞郎', 'icon': '🇺🇸🇨🇭'},
+        'USDCNH': {'name': '美元/人民币', 'icon': '🇺🇸🇨🇳'},
+        'AUDUSD': {'name': '澳元/美元', 'icon': '🇦🇺🇺🇸'},
+        'XAUUSD': {'name': '黄金/美元', 'icon': '🥇'},
+        'XAGUSD': {'name': '白银/美元', 'icon': '🥈'},
+        'BTCUSD': {'name': '比特币/美元', 'icon': '₿'}
+    }
+    
+    # 按优先级排序：黄金、白银、比特币优先，然后是主要货币对
+    priority_order = ['XAUUSD', 'XAGUSD', 'BTCUSD', 'EURUSD', 'GBPUSD', 'USDJPY', 'USDCHF', 'USDCNH', 'AUDUSD']
+    
+    for pair in priority_order:
+        # 从rates中获取价格
+        rate_info = rates.get(pair)
+        if rate_info:
+            price = rate_info.get('rate', 0)
+            source = rate_info.get('source', '未知')
+        else:
+            # 尝试从signals中获取价格
+            signal = next((s for s in signals if s.get('pair') == pair), None)
+            if signal:
+                price = signal.get('last_price', 0)
+                source = signal.get('source', 'Ziwox')
+            else:
+                continue  # 如果都没有价格信息，跳过这个货币对
+        
+        # 格式化价格
+        if price > 0:
+            # 根据货币对类型决定小数位数
+            if pair in ['XAUUSD', 'XAGUSD']:
+                # 贵金属显示2位小数
+                formatted_price = f"{price:.2f}"
+            elif pair == 'BTCUSD':
+                # 比特币显示整数
+                formatted_price = f"{int(price)}"
+            else:
+                # 外汇货币对显示4-5位小数
+                if price < 10:
+                    formatted_price = f"{price:.5f}"
+                else:
+                    formatted_price = f"{price:.4f}"
+            
+            # 获取显示信息
+            display_info = pair_display_info.get(pair, {'name': pair, 'icon': '💱'})
+            
+            # 创建摘要对象
+            summary = {
+                'pair': pair,
+                'name': display_info['name'],
+                'icon': display_info['icon'],
+                'price': formatted_price,
+                'source': source,
+                'trend': 'neutral'  # 这里可以添加趋势判断逻辑
+            }
+            
+            currency_pairs_summary.append(summary)
+    
+    logger.info(f"生成货币对摘要，共 {len(currency_pairs_summary)} 个货币对")
+    return currency_pairs_summary
+
+# ============================================================================
 # 核心数据更新函数
 # ============================================================================
 def execute_data_update():
@@ -1060,15 +1135,20 @@ def execute_data_update():
         analysis_result = generate_comprehensive_analysis_with_sections(signals, rates, events)
         
         sections = analysis_result.get("sections", {})
+        
+        # 5. 生成货币对摘要
+        logger.info("阶段5/4: 生成货币对摘要...")
+        currency_pairs_summary = generate_currency_pairs_summary(signals, rates)
 
-        # 5. 存储数据
-        store.update_all(signals, rates, events, "实时AI分析报告", sections)
+        # 6. 存储数据
+        store.update_all(signals, rates, events, "实时AI分析报告", sections, None, currency_pairs_summary)
 
         logger.info(f"数据更新成功完成:")
         logger.info(f"  - 市场信号: {len(signals)} 个")
         logger.info(f"  - 汇率数据: {len(rates)} 个")
         logger.info(f"  - 财经日历: {len(events)} 个（完整版）")
         logger.info(f"  - AI分析章节: {len(sections)} 个")
+        logger.info(f"  - 货币对摘要: {len(currency_pairs_summary)} 个")
         logger.info("="*60)
         return True
 
@@ -1139,14 +1219,14 @@ scheduler.add_job(scheduled_data_update, 'cron', hour=16, minute=0)
 scheduler.start()
 
 # ============================================================================
-# Flask路由 - 修复分章节总结接口
+# Flask路由 - 新增货币对摘要接口
 # ============================================================================
 @app.route('/')
 def index():
     return jsonify({
         "status": "running",
         "service": "宏观经济AI分析工具（实时版）",
-        "version": "5.1",
+        "version": "5.2",
         "data_sources": {
             "market_signals": "Ziwox",
             "forex_rates": "Alpha Vantage + Ziwox补充",
@@ -1256,14 +1336,33 @@ def get_today_events():
 
 @app.route('/api/summary')
 def get_today_summary():
-    """获取今日总结 - 分章节版本"""
+    """获取今日总结 - 分章节版本，包含货币对摘要"""
     sections = store.summary_sections
+    currency_pairs = store.currency_pairs_summary
+    
+    # 计算高影响事件数量
+    high_impact_count = len([e for e in store.economic_events if e.get('importance', 1) == 3])
+    
+    # 确保返回北京时间格式
+    beijing_timezone = timezone(timedelta(hours=8))
+    generated_at = datetime.now(beijing_timezone)
+    
+    if store.last_updated:
+        # 如果已有时间，确保是北京时间
+        if store.last_updated.tzinfo is None:
+            # 如果没有时区信息，添加北京时间
+            generated_at = store.last_updated.replace(tzinfo=beijing_timezone)
+        else:
+            # 转换为北京时间
+            generated_at = store.last_updated.astimezone(beijing_timezone)
     
     return jsonify({
         "status": "success",
         "summary": "基于实时数据的AI分析报告",
         "sections": sections,
-        "generated_at": store.last_updated.isoformat() if store.last_updated else datetime.now(timezone(timedelta(hours=8))).isoformat(),
+        "currency_pairs": currency_pairs,
+        "high_impact_events_count": high_impact_count,
+        "generated_at": generated_at.isoformat(),
         "ai_enabled": config.enable_ai,
         "timezone": "北京时间 (UTC+8)"
     })
@@ -1276,6 +1375,18 @@ def get_summary_sections():
     return jsonify({
         "status": "success",
         "sections": sections,
+        "generated_at": store.last_updated.isoformat() if store.last_updated else datetime.now(timezone(timedelta(hours=8))).isoformat()
+    })
+
+@app.route('/api/currency_pairs/summary')
+def get_currency_pairs_summary():
+    """获取货币对摘要信息"""
+    currency_pairs = store.currency_pairs_summary
+    
+    return jsonify({
+        "status": "success",
+        "currency_pairs": currency_pairs,
+        "count": len(currency_pairs),
         "generated_at": store.last_updated.isoformat() if store.last_updated else datetime.now(timezone(timedelta(hours=8))).isoformat()
     })
 
@@ -1328,6 +1439,7 @@ def get_overview():
         "market_signals_count": len(store.market_signals),
         "forex_rates_count": len(store.forex_rates),
         "economic_events_count": len(store.economic_events),
+        "currency_pairs_summary_count": len(store.currency_pairs_summary),
         "importance_breakdown": {
             "high": high_count,
             "medium": medium_count,
@@ -1358,7 +1470,9 @@ if __name__ == '__main__':
         if success:
             logger.info("初始实时数据获取成功")
             events = store.economic_events
+            currency_pairs = store.currency_pairs_summary
             logger.info(f"事件总数: {len(events)}")
+            logger.info(f"货币对摘要数: {len(currency_pairs)}")
             
             # 检查非农就业数据是否被抓取
             non_farm_events = [e for e in events if 'non-farm' in e.get('name', '').lower() or 'employment' in e.get('name', '').lower()]
