@@ -72,20 +72,27 @@ class DataStore:
     def __init__(self):
         self.market_signals = []      # Ziwox市场信号
         self.forex_rates = {}         # Alpha Vantage汇率
-        self.economic_events = []     # 财经日历事件
+        self.economic_events = []     # 默认语言（中文）财经日历事件
+        self.economic_events_by_lang = {}  # 多语言事件存储
         self.daily_analysis = ""      # 每日AI综合分析
         self.last_updated = None
         self.is_updating = False
         self.last_update_error = None
-        self.individual_ai_analysis = {}  # 存储每个事件的AI分析
-        self.summary_sections = {     # Summary页面的各个部分
-            "market": "",
-            "events": "",
-            "outlook": "",
-            "risks": ""
-        }
         self.summary_sections_by_lang = {}  # 按语言存储总结章节
         self.currency_pairs_summary = []  # 货币对摘要信息
+
+    def update_all_with_languages(self, data):
+        """更新所有数据，包括多语言版本"""
+        self.market_signals = data.get('signals', [])
+        self.forex_rates = data.get('rates', {})
+        self.economic_events = data.get('events', [])
+        self.economic_events_by_lang = data.get('events_by_lang', {})
+        self.daily_analysis = data.get('daily_analysis', "")
+        self.summary_sections_by_lang = data.get('summary_sections_by_lang', {})
+        self.currency_pairs_summary = data.get('currency_pairs_summary', [])
+        self.last_updated = datetime.now()
+        self.is_updating = False
+        self.last_update_error = None
 
     def update_all(self, signals, rates, events, analysis, summary_sections=None, individual_analysis=None, currency_pairs_summary=None):
         self.market_signals = signals
@@ -93,9 +100,7 @@ class DataStore:
         self.economic_events = events
         self.daily_analysis = analysis
         if summary_sections:
-            self.summary_sections = summary_sections
-        if individual_analysis:
-            self.individual_ai_analysis = individual_analysis
+            self.summary_sections_by_lang = summary_sections
         if currency_pairs_summary:
             self.currency_pairs_summary = currency_pairs_summary
         self.last_updated = datetime.now()
@@ -304,7 +309,7 @@ def fetch_calendar_forex_factory():
     
     # 如果失败，回退到模拟数据
     logger.warning("Forex Factory API获取失败，使用模拟数据")
-    return get_complete_simulated_calendar()
+    return get_complete_simulated_calendar('zh-CN')
 
 def parse_forex_factory_events_complete(raw_events):
     """
@@ -415,12 +420,42 @@ def parse_forex_factory_events_complete(raw_events):
     # 移除限制，返回所有事件
     return events
 
-def get_complete_simulated_calendar():
-    """完整的模拟数据生成 - 包含更多事件"""
+def get_complete_simulated_calendar(language='zh-CN'):
+    """完整的模拟数据生成 - 包含更多事件（支持多语言）"""
     beijing_timezone = timezone(timedelta(hours=8))
     now_beijing = datetime.now(beijing_timezone)
     today_str = now_beijing.strftime("%Y-%m-%d")
     hour = now_beijing.hour
+    
+    # 根据语言设置事件名称
+    if language == 'zh-CN':
+        event_data = {
+            "fed_rate": "美联储利率决议",
+            "china_cpi": "中国CPI年率",
+            "non_farm": "美国非农就业人数变化",
+            "ism_pmi": "美国ISM制造业PMI",
+            "uk_gdp": "英国GDP月率",
+            "eu_cpi": "欧元区CPI年率",
+            "china_trade": "中国贸易帐",
+            "initial_jobless": "美国初请失业金人数",
+            "eu_retail": "欧元区零售销售月率"
+        }
+        today_desc = "今天"
+        tomorrow_desc = "明天"
+    else:
+        event_data = {
+            "fed_rate": "Fed Interest Rate Decision",
+            "china_cpi": "China CPI YoY",
+            "non_farm": "US Non-Farm Employment Change",
+            "ism_pmi": "US ISM Manufacturing PMI",
+            "uk_gdp": "UK GDP MoM",
+            "eu_cpi": "Eurozone CPI YoY",
+            "china_trade": "China Trade Balance",
+            "initial_jobless": "US Initial Jobless Claims",
+            "eu_retail": "Eurozone Retail Sales MoM"
+        }
+        today_desc = "Today"
+        tomorrow_desc = "Tomorrow"
     
     # 获取本周的日期
     base_events = []
@@ -432,14 +467,14 @@ def get_complete_simulated_calendar():
             "date": today_str,
             "time": "21:00",
             "country": "US",
-            "name": "美联储利率决议",
+            "name": event_data["fed_rate"],
             "forecast": "5.5%",
             "previous": "5.5%",
-            "actual": "5.5%" if hour >= 21 else "待公布",
+            "actual": "5.5%" if hour >= 21 else ("待公布" if language == 'zh-CN' else "Pending"),
             "importance": 3,
             "currency": "USD",
-            "description": "美联储联邦基金利率决定",
-            "source": "模拟数据",
+            "description": event_data["fed_rate"],
+            "source": "Simulated Data",
             "is_important": True
         },
         {
@@ -447,14 +482,14 @@ def get_complete_simulated_calendar():
             "date": today_str,
             "time": "09:30",
             "country": "CN",
-            "name": "中国CPI年率",
+            "name": event_data["china_cpi"],
             "forecast": "0.2%",
             "previous": "0.1%",
-            "actual": "0.3%" if hour >= 9 else "待公布",
+            "actual": "0.3%" if hour >= 9 else ("待公布" if language == 'zh-CN' else "Pending"),
             "importance": 2,
             "currency": "CNY",
-            "description": "中国消费者价格指数同比变化",
-            "source": "模拟数据",
+            "description": event_data["china_cpi"],
+            "source": "Simulated Data",
             "is_important": True
         },
         {
@@ -462,14 +497,14 @@ def get_complete_simulated_calendar():
             "date": today_str,
             "time": "20:30",
             "country": "US",
-            "name": "美国非农就业人数变化",
+            "name": event_data["non_farm"],
             "forecast": "180K",
             "previous": "199K",
-            "actual": "待公布" if hour < 20 else "185K",
+            "actual": "待公布" if hour < 20 else "185K" if language == 'zh-CN' else "Pending" if hour < 20 else "185K",
             "importance": 3,
             "currency": "USD",
-            "description": "美国非农业就业人数月度变化",
-            "source": "模拟数据",
+            "description": event_data["non_farm"],
+            "source": "Simulated Data",
             "is_important": True
         },
         {
@@ -477,14 +512,14 @@ def get_complete_simulated_calendar():
             "date": today_str,
             "time": "21:45",
             "country": "US",
-            "name": "美国ISM制造业PMI",
+            "name": event_data["ism_pmi"],
             "forecast": "49.5",
             "previous": "48.7",
-            "actual": "待公布" if hour < 21 else "50.1",
+            "actual": "待公布" if hour < 21 else "50.1" if language == 'zh-CN' else "Pending" if hour < 21 else "50.1",
             "importance": 2,
             "currency": "USD",
-            "description": "美国供应管理协会制造业采购经理人指数",
-            "source": "模拟数据",
+            "description": event_data["ism_pmi"],
+            "source": "Simulated Data",
             "is_important": True
         }
     ]
@@ -498,14 +533,14 @@ def get_complete_simulated_calendar():
             "date": tomorrow_str,
             "time": "15:00",
             "country": "GB",
-            "name": "英国GDP月率",
+            "name": event_data["uk_gdp"],
             "forecast": "0.1%",
             "previous": "0.0%",
-            "actual": "待公布",
+            "actual": "待公布" if language == 'zh-CN' else "Pending",
             "importance": 2,
             "currency": "GBP",
-            "description": "英国国内生产总值月度增长率",
-            "source": "模拟数据",
+            "description": event_data["uk_gdp"],
+            "source": "Simulated Data",
             "is_important": True
         },
         {
@@ -513,14 +548,14 @@ def get_complete_simulated_calendar():
             "date": tomorrow_str,
             "time": "17:00",
             "country": "EU",
-            "name": "欧元区CPI年率",
+            "name": event_data["eu_cpi"],
             "forecast": "2.4%",
             "previous": "2.6%",
-            "actual": "待公布",
+            "actual": "待公布" if language == 'zh-CN' else "Pending",
             "importance": 2,
             "currency": "EUR",
-            "description": "欧元区消费者价格指数同比变化",
-            "source": "模拟数据",
+            "description": event_data["eu_cpi"],
+            "source": "Simulated Data",
             "is_important": True
         }
     ]
@@ -534,14 +569,14 @@ def get_complete_simulated_calendar():
             "date": day_after_str,
             "time": "10:00",
             "country": "CN",
-            "name": "中国贸易帐",
+            "name": event_data["china_trade"],
             "forecast": "85.0B",
             "previous": "68.1B",
-            "actual": "待公布",
+            "actual": "待公布" if language == 'zh-CN' else "Pending",
             "importance": 2,
             "currency": "CNY",
-            "description": "中国进出口贸易差额",
-            "source": "模拟数据",
+            "description": event_data["china_trade"],
+            "source": "Simulated Data",
             "is_important": True
         }
     ]
@@ -557,14 +592,14 @@ def get_complete_simulated_calendar():
             "date": date_str,
             "time": "14:30",
             "country": "US",
-            "name": "美国初请失业金人数",
+            "name": event_data["initial_jobless"],
             "forecast": "210K",
             "previous": "209K",
-            "actual": "待公布",
+            "actual": "待公布" if language == 'zh-CN' else "Pending",
             "importance": 2,
             "currency": "USD",
-            "description": "美国每周首次申请失业救济人数",
-            "source": "模拟数据",
+            "description": event_data["initial_jobless"],
+            "source": "Simulated Data",
             "is_important": True
         })
         
@@ -573,14 +608,14 @@ def get_complete_simulated_calendar():
             "date": date_str,
             "time": "16:00",
             "country": "EU",
-            "name": "欧元区零售销售月率",
+            "name": event_data["eu_retail"],
             "forecast": "0.3%",
             "previous": "-0.1%",
-            "actual": "待公布",
+            "actual": "待公布" if language == 'zh-CN' else "Pending",
             "importance": 1,
             "currency": "EUR",
-            "description": "欧元区零售销售月度变化",
-            "source": "模拟数据",
+            "description": event_data["eu_retail"],
+            "source": "Simulated Data",
             "is_important": False
         })
     
@@ -591,7 +626,7 @@ def get_complete_simulated_calendar():
     # 按日期和时间排序
     base_events.sort(key=lambda x: (x["date"], x["time"]))
     
-    logger.info(f"使用完整模拟财经日历数据，共 {len(base_events)} 个事件")
+    logger.info(f"使用完整模拟财经日历数据，语言: {language}, 共 {len(base_events)} 个事件")
     return base_events
 
 def map_impact_to_importance(impact):
@@ -713,22 +748,8 @@ def get_country_code_from_currency(country_str):
     
     return country_str[:2] if len(country_str) >= 2 else "GL"
 
-def fetch_economic_calendar():
-    """主函数：获取财经日历"""
-    if config.use_mock:
-        logger.info("配置为使用模拟数据模式")
-        return get_complete_simulated_calendar()
-    
-    # 优先尝试：Forex Factory JSON API
-    events = fetch_calendar_forex_factory()
-    
-    # 确保事件有AI分析
-    events_with_ai = add_ai_analysis_to_events(events)
-    
-    return events_with_ai
-
-def add_ai_analysis_to_events(events):
-    """为事件添加AI分析"""
+def add_ai_analysis_to_events(events, language='zh-CN'):
+    """为事件添加AI分析（支持多语言）"""
     if not events:
         return events
     
@@ -737,19 +758,38 @@ def add_ai_analysis_to_events(events):
     
     for event in important_events:
         try:
-            ai_analysis = generate_ai_analysis_for_event(event)
+            # 生成对应语言的AI分析
+            ai_analysis = generate_ai_analysis_for_event(event, language)
             event['ai_analysis'] = ai_analysis
+            # 添加语言标记，方便调试
+            event['ai_language'] = language
             time.sleep(0.5)  # 避免API调用过于频繁
         except Exception as e:
             logger.error(f"为事件生成AI分析失败: {e}")
-            event['ai_analysis'] = "【AI分析】分析生成失败，请稍后重试"
+            event['ai_analysis'] = t_ai("【AI分析】分析生成失败，请稍后重试", language)
+            event['ai_language'] = language
     
-    # 为其他事件添加默认AI分析
+    # 为其他事件添加默认AI分析（对应语言）
     for event in events:
         if 'ai_analysis' not in event:
-            event['ai_analysis'] = "【AI分析】该事件重要性较低，暂无详细分析。关注市场整体情绪和主要货币对走势。"
+            event['ai_analysis'] = t_ai("【AI分析】该事件重要性较低，暂无详细分析。关注市场整体情绪和主要货币对走势。", language)
+            event['ai_language'] = language
     
     return events
+
+def fetch_economic_calendar(language='zh-CN'):
+    """主函数：获取财经日历（支持多语言）"""
+    if config.use_mock:
+        logger.info(f"配置为使用模拟数据模式，语言: {language}")
+        return get_complete_simulated_calendar(language)
+    
+    # 优先尝试：Forex Factory JSON API
+    events = fetch_calendar_forex_factory()
+    
+    # 确保事件有对应语言的AI分析
+    events_with_ai = add_ai_analysis_to_events(events, language)
+    
+    return events_with_ai
 
 # ============================================================================
 # 模块4：AI综合分析生成 (laozhang.ai) - 修复self错误并加入实时数据
@@ -848,7 +888,8 @@ def t_ai(text, language='zh-CN'):
             "【AI分析】分析生成中...": "【AI分析】分析生成中...",
             "【AI分析】分析生成失败，请稍后重试": "【AI分析】分析生成失败，请稍后重试",
             "你是一位经验丰富的外汇宏观交易员，擅长给出清晰、直接、可执行的交易分析。": "你是一位经验丰富的外汇宏观交易员，擅长给出清晰、直接、可执行的交易分析。",
-            "【AI分析】": "【AI分析】"
+            "【AI分析】": "【AI分析】",
+            "【AI分析】该事件重要性较低，暂无详细分析。关注市场整体情绪和主要货币对走势。": "【AI分析】该事件重要性较低，暂无详细分析。关注市场整体情绪和主要货币对走势。"
         },
         'en-US': {
             "【AI分析】AI分析功能当前已禁用": "[AI Analysis] AI analysis function is currently disabled",
@@ -857,7 +898,8 @@ def t_ai(text, language='zh-CN'):
             "【AI分析】分析生成中...": "[AI Analysis] Analysis generating...",
             "【AI分析】分析生成失败，请稍后重试": "[AI Analysis] Analysis generation failed, please try again later",
             "你是一位经验丰富的外汇宏观交易员，擅长给出清晰、直接、可执行的交易分析。": "You are an experienced macro FX trader, skilled at providing clear, direct, and actionable trading analysis.",
-            "【AI分析】": "[AI Analysis] "
+            "【AI分析】": "[AI Analysis] ",
+            "【AI分析】该事件重要性较低，暂无详细分析。关注市场整体情绪和主要货币对走势。": "[AI Analysis] This event has low importance, no detailed analysis available. Focus on overall market sentiment and major currency pair movements."
         }
     }
     
@@ -1021,15 +1063,15 @@ def parse_ai_response_into_sections(ai_content, language='zh-CN'):
     
     # 根据语言设置章节关键词
     if language == 'zh-CN':
-        market_keywords = ["市场概况", "市场分析"]
-        events_keywords = ["事件分析", "经济事件"]
-        outlook_keywords = ["货币对展望", "货币展望", "交易展望"]
-        risks_keywords = ["风险提示", "风险分析", "注意事项"]
+        market_keywords = ["市场概况", "市场分析", "市场概述"]
+        events_keywords = ["事件分析", "经济事件", "重要事件"]
+        outlook_keywords = ["货币对展望", "货币展望", "交易展望", "货币对分析"]
+        risks_keywords = ["风险提示", "风险分析", "注意事项", "风险警告"]
     else:  # English
         market_keywords = ["Market Overview", "Market Analysis", "Market Summary"]
         events_keywords = ["Event Analysis", "Economic Events", "Key Events"]
-        outlook_keywords = ["Currency Outlook", "Pair Outlook", "Trading Outlook"]
-        risks_keywords = ["Risk Warning", "Risk Analysis", "Important Notes"]
+        outlook_keywords = ["Currency Outlook", "Pair Outlook", "Trading Outlook", "Currency Pair Outlook"]
+        risks_keywords = ["Risk Warning", "Risk Analysis", "Important Notes", "Risk Considerations"]
     
     # 解析逻辑保持不变，使用多语言关键词
     lines = ai_content.split('\n')
@@ -1220,36 +1262,54 @@ def execute_data_update():
         logger.info("阶段2/4: 获取实时汇率...")
         rates = fetch_forex_rates_alpha_vantage(signals)
 
-        # 3. 获取财经日历数据（完整版）
+        # 3. 获取财经日历数据（完整版）- 这里我们先获取中文版
         logger.info("阶段3/4: 获取财经日历（完整版）...")
-        events = fetch_economic_calendar()
+        # 我们会为每种语言分别生成事件数据
+        events_by_lang = {}
+        languages = ['zh-CN', 'en-US']
         
-        # 确保事件按正确时间排序
-        events = sort_events_by_datetime(events)
+        for lang in languages:
+            events = fetch_economic_calendar(lang)
+            events = sort_events_by_datetime(events)
+            events_by_lang[lang] = events
+            logger.info(f"  生成 {lang} 语言事件: {len(events)} 个")
+        
+        # 默认使用中文事件存储
+        events = events_by_lang.get('zh-CN', [])
 
         # 4. 生成综合AI分析（分章节）
         logger.info("阶段4/4: 生成综合AI分析（分章节）...")
         # 为每种语言生成分析
-        languages = ['zh-CN', 'en-US']
+        summary_sections_by_lang = {}
         for lang in languages:
             analysis_result = generate_comprehensive_analysis_with_sections(signals, rates, events, lang)
             sections = analysis_result.get("sections", {})
-            if not hasattr(store, 'summary_sections_by_lang'):
-                store.summary_sections_by_lang = {}
-            store.summary_sections_by_lang[lang] = sections
+            summary_sections_by_lang[lang] = sections
         
         # 5. 生成货币对摘要
         logger.info("阶段5/4: 生成货币对摘要...")
         currency_pairs_summary = generate_currency_pairs_summary(signals, rates)
 
         # 6. 存储数据
-        store.update_all(signals, rates, events, "实时AI分析报告", None, None, currency_pairs_summary)
+        # 创建存储对象，包含多语言事件
+        store_data = {
+            'signals': signals,
+            'rates': rates,
+            'events': events,  # 默认事件（中文）
+            'events_by_lang': events_by_lang,  # 存储多语言事件
+            'daily_analysis': "实时AI分析报告",
+            'summary_sections_by_lang': summary_sections_by_lang,
+            'currency_pairs_summary': currency_pairs_summary
+        }
+        
+        # 更新存储
+        store.update_all_with_languages(store_data)
 
         logger.info(f"数据更新成功完成:")
         logger.info(f"  - 市场信号: {len(signals)} 个")
         logger.info(f"  - 汇率数据: {len(rates)} 个")
-        logger.info(f"  - 财经日历: {len(events)} 个（完整版）")
-        logger.info(f"  - AI分析章节: {len(store.summary_sections_by_lang)} 种语言")
+        logger.info(f"  - 财经日历: {len(events)} 个（完整版，多语言）")
+        logger.info(f"  - AI分析章节: {len(summary_sections_by_lang)} 种语言")
         logger.info(f"  - 货币对摘要: {len(currency_pairs_summary)} 个")
         logger.info("="*60)
         return True
@@ -1387,45 +1447,53 @@ def refresh_data():
 
 @app.route('/api/events/today')
 def get_today_events():
-    """获取今日事件 - 完整版，按时间排序"""
+    """获取今日事件 - 完整版，按时间排序，支持多语言"""
     # 从查询参数获取语言，默认为中文
     language = request.args.get('lang', 'zh-CN')
     
-    events = store.economic_events
+    # 检查是否有多语言存储，如果没有则使用默认方式
+    if hasattr(store, 'economic_events_by_lang') and store.economic_events_by_lang:
+        # 优先使用多语言存储
+        events = store.economic_events_by_lang.get(language, [])
+        if not events:
+            # 如果没有对应语言，使用默认语言
+            events = store.economic_events
+    else:
+        # 回退到传统方式
+        events = store.economic_events
+        # 为每个事件生成对应语言的AI分析
+        events = add_ai_analysis_to_events(events, language)
     
     # 如果没有数据且不在更新中，执行一次更新
     if not events and not store.is_updating:
         success = execute_data_update()
-        events = store.economic_events if success else []
+        if success and hasattr(store, 'economic_events_by_lang'):
+            events = store.economic_events_by_lang.get(language, [])
+        else:
+            events = store.economic_events
     
-    # 为每个事件生成对应语言的AI分析
-    events_with_lang = []
-    for event in events:
-        event_copy = event.copy()
-        if 'ai_analysis' not in event_copy:
-            # 获取事件的AI分析
-            event_copy['ai_analysis'] = generate_ai_analysis_for_event(event_copy, language)
-        events_with_lang.append(event_copy)
+    # 确保事件按正确时间排序
+    events = sort_events_by_datetime(events)
     
     # 统计信息
-    total_events = len(events_with_lang)
-    high_impact = len([e for e in events_with_lang if e.get('importance', 1) == 3])
-    medium_impact = len([e for e in events_with_lang if e.get('importance', 1) == 2])
-    low_impact = len([e for e in events_with_lang if e.get('importance', 1) == 1])
+    total_events = len(events)
+    high_impact = len([e for e in events if e.get('importance', 1) == 3])
+    medium_impact = len([e for e in events if e.get('importance', 1) == 2])
+    low_impact = len([e for e in events if e.get('importance', 1) == 1])
     
     # 检查今天的事件
     today = datetime.now(timezone(timedelta(hours=8))).date()
     today_str = today.strftime("%Y-%m-%d")
-    today_events = [e for e in events_with_lang if e.get('date') == today_str]
+    today_events = [e for e in events if e.get('date') == today_str]
     
     # 检查明天的事件
     tomorrow = today + timedelta(days=1)
     tomorrow_str = tomorrow.strftime("%Y-%m-%d")
-    tomorrow_events = [e for e in events_with_lang if e.get('date') == tomorrow_str]
+    tomorrow_events = [e for e in events if e.get('date') == tomorrow_str]
     
     return jsonify({
         "status": "success",
-        "data": events_with_lang,
+        "data": events,
         "count": total_events,
         "importance_stats": {
             "high": high_impact,
@@ -1578,6 +1646,7 @@ if __name__ == '__main__':
     logger.info(f"特殊品种: XAU/USD (黄金), XAG/USD (白银), BTC/USD (比特币)")
     logger.info(f"模拟模式: {config.use_mock}")
     logger.info(f"时区: 北京时间 (UTC+8)")
+    logger.info(f"多语言支持: 中文, 英文")
     logger.info("注意: AI分析将基于实时价格数据生成")
     logger.info("="*60)
 
@@ -1591,6 +1660,7 @@ if __name__ == '__main__':
             currency_pairs = store.currency_pairs_summary
             logger.info(f"事件总数: {len(events)}")
             logger.info(f"货币对摘要数: {len(currency_pairs)}")
+            logger.info(f"支持的语言: {list(store.summary_sections_by_lang.keys())}")
             
             # 检查非农就业数据是否被抓取
             non_farm_events = [e for e in events if 'non-farm' in e.get('name', '').lower() or 'employment' in e.get('name', '').lower()]
