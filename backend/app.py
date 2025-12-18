@@ -742,7 +742,7 @@ def generate_ai_analysis_for_event(event, signals=None, rates=None):
         }
         
         request_body = {
-            "model": "grok-4",
+            "model": "gpt-5.2",
             "messages": [
                 {"role": "system", "content": "你是一位经验丰富的外汇宏观交易员。如果用户提供了当前价格数据，请基于这些价格进行分析。如果没有提供价格数据，请基于一般市场知识进行分析，但不要编造具体的价格数值。"},
                 {"role": "user", "content": prompt}
