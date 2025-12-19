@@ -632,16 +632,14 @@ def extract_actual_values_from_html(html_content, events_needing_update):
     
     return actual_values
 
-def map_impact_to_importance(impact):
-    """映射影响级别到重要性数值"""
-    if not impact:
+def map_impact_to_importance(impact_class_list):
+    """根据CSS类映射重要性"""
+    if not impact_class_list:
         return 1
     
-    impact = str(impact).lower()
-    
-    if impact in ["high", "red"]:
+    if any('high' in str(cls).lower() for cls in impact_class_list):
         return 3
-    elif impact in ["medium", "orange", "yellow"]:
+    elif any('medium' in str(cls).lower() for cls in impact_class_list):
         return 2
     else:
         return 1
@@ -1342,7 +1340,7 @@ def execute_data_update():
     """执行数据更新的核心逻辑"""
     try:
         logger.info("="*60)
-        logger.info(f"开始执行数据更新: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        logger.info(f"开始执行数据更新: {datetime.now().strftime('%Y-%m-d %H:%M:%S')}")
 
         # 1. 获取市场信号数据
         logger.info("阶段1/4: 获取市场信号...")
@@ -1622,7 +1620,7 @@ def get_market_signals():
         "source": "Ziwox",
         "special_pairs": [
             {"pair": "XAUUSD", "name": "黄金/美元", "type": "贵金属"},
-            {"pair": "XAGUSD", {"name": "白银/美元", "type": "贵金属"},
+            {"pair": "XAGUSD", "name": "白银/美元", "type": "贵金属"},
             {"pair": "BTCUSD", "name": "比特币/美元", "type": "加密货币"}
         ]
     })
