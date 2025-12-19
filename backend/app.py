@@ -904,7 +904,7 @@ def generate_comprehensive_analysis_with_sections(signals, rates, events):
         
         # 修复：使用正确的模型名称和参数
         request_body = {
-            "model": "gpt-4",  # 修改：将 gpt-4 改为 gpt-4，这是正确的模型名称
+            "model": "gpt-5-pro",  # 修改：将 gpt-5-pro 改为 gpt-5-pro，这是正确的模型名称
             "messages": [
                 {"role": "system", "content": "你是一位经验丰富的外汇和贵金属交易员，擅长给出结构化、清晰、可执行的交易分析。请严格按照用户要求的四个章节格式输出，不要遗漏任何章节。基于提供的实时价格数据进行分析。"},
                 {"role": "user", "content": prompt}
@@ -1287,7 +1287,7 @@ def index():
             "market_signals": "Ziwox",
             "forex_rates": "Alpha Vantage + Ziwox补充",
             "economic_calendar": "Forex Factory JSON API",
-            "ai_analysis": "laozhang.ai（GPT-4模型）"
+            "ai_analysis": "laozhang.ai（gpt-5-pro模型）"
         },
         "special_pairs": ["XAU/USD (黄金)", "XAG/USD (白银)", "BTC/USD (比特币)"],
         "timezone": "北京时间 (UTC+8)",
@@ -1303,7 +1303,7 @@ def get_api_status():
     return jsonify({
         "status": "healthy",
         "ai_enabled": config.enable_ai,
-        "ai_model": "gpt-4",
+        "ai_model": "gpt-5-pro",
         "timezone": "北京时间 (UTC+8)",
         "update_status": {
             "is_updating": store.is_updating,
@@ -1432,7 +1432,7 @@ def get_today_summary():
         "high_impact_events_count": high_impact_count,
         "generated_at": datetime.now(timezone(timedelta(hours=8))).isoformat(),
         "ai_enabled": config.enable_ai,
-        "ai_model": "gpt-4",
+        "ai_model": "gpt-5-pro",
         "timezone": "北京时间 (UTC+8)",
         "note": "分析基于最新实时行情数据，每30分钟自动更新"
     })
@@ -1481,7 +1481,7 @@ def get_daily_analysis():
         "analysis": analysis,
         "generated_at": datetime.now(timezone(timedelta(hours=8))).isoformat(),
         "ai_provider": "laozhang.ai",
-        "ai_model": "gpt-4",
+        "ai_model": "gpt-5-pro",
         "timezone": "北京时间 (UTC+8)"
     })
 
@@ -1515,7 +1515,7 @@ def get_overview():
         },
         "ai_status": {
             "enabled": config.enable_ai,
-            "model": "gpt-4",
+            "model": "gpt-5-pro",
             "has_real_analysis": has_real_ai,
             "sections_count": len(store.summary_sections) if store.summary_sections else 0
         }
@@ -1528,10 +1528,10 @@ if __name__ == '__main__':
     logger.info("="*60)
     logger.info("启动宏观经济AI分析工具（实时数据版）")
     logger.info(f"财经日历源: Forex Factory JSON API")
-    logger.info(f"AI分析服务: laozhang.ai（GPT-4模型）")
+    logger.info(f"AI分析服务: laozhang.ai（gpt-5-pro模型）")
     logger.info(f"特殊品种: XAU/USD (黄金), XAG/USD (白银), BTC/USD (比特币)")
     logger.info(f"时区: 北京时间 (UTC+8)")
-    logger.info(f"AI模型: GPT-4")
+    logger.info(f"AI模型: gpt-5-pro")
     logger.info("注意: AI分析将基于实时价格数据生成")
     logger.info("="*60)
 
