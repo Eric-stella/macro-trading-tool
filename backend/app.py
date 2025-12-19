@@ -1,5 +1,6 @@
 """
 宏观经济AI分析工具 - 实时数据版
+修复实际值获取问题
 """
 
 import os
@@ -15,6 +16,7 @@ from flask_cors import CORS
 from apscheduler.schedulers.background import BackgroundScheduler
 import requests
 from alpha_vantage.foreignexchange import ForeignExchange
+from bs4 import BeautifulSoup
 
 # 创建Flask应用
 app = Flask(__name__)
@@ -61,6 +63,9 @@ class Config:
 
         # Forex Factory JSON API URL
         self.forex_factory_url = "https://nfs.faireconomy.media/ff_calendar_thisweek.json"
+        
+        # Forex Factory 网站URL（仅用于获取实际值）
+        self.forex_factory_base_url = "https://www.forexfactory.com"
         
         # 事件到货币对的映射 - 修复版
         self.event_to_pairs_mapping = {
@@ -344,10 +349,10 @@ def fetch_forex_rates_alpha_vantage(ziwox_signals):
     return rates
 
 # ============================================================================
-# 模块3：财经日历获取 (Forex Factory JSON API)
+# 模块3：财经日历获取 (JSON API + 网页实际值补充)
 # ============================================================================
 def fetch_calendar_forex_factory():
-    """从Forex Factory JSON API获取本周所有经济日历数据"""
+    """从Forex Factory JSON API获取本周所有经济日历数据，并补充实际值"""
     try:
         logger.info("正在从Forex Factory JSON API获取经济日历...")
         
@@ -369,7 +374,11 @@ def fetch_calendar_forex_factory():
             if isinstance(data, list) and len(data) > 0:
                 events = parse_forex_factory_events(data)
                 logger.info(f"成功从Forex Factory解析 {len(events)} 个事件（北京时间）")
-                return events
+                
+                # 补充实际值（只针对已发生的事件）
+                events_with_actual = supplement_actual_values(events)
+                
+                return events_with_actual
         else:
             logger.error(f"Forex Factory API请求失败，状态码: {response.status_code}")
             
@@ -432,6 +441,9 @@ def parse_forex_factory_events(raw_events):
                     # 只显示今天及之后的事件
                     if event_date < today:
                         continue
+                        
+                    # 判断事件是否已经发生
+                    event_passed = event_datetime_beijing < now_beijing
                 else:
                     # 如果没有日期时间，跳过
                     continue
@@ -456,12 +468,15 @@ def parse_forex_factory_events(raw_events):
                 "name": title[:100],
                 "forecast": str(forecast)[:50] if forecast not in ["", None] else "N/A",
                 "previous": str(previous)[:50] if previous not in ["", None] else "N/A",
+                "actual": "待发布" if event_passed else "N/A",  # 初始值：如果已发生但无实际值，标记为"待发布"
                 "importance": importance,
                 "currency": currency,
-                "actual": "N/A",
                 "description": title[:150],
                 "source": "Forex Factory JSON API",
-                "is_important": importance >= 2
+                "is_important": importance >= 2,
+                "has_passed": event_passed,
+                "event_datetime_beijing": event_datetime_beijing,  # 保存完整时间用于后续比较
+                "needs_actual_update": event_passed  # 标记是否需要更新实际值
             }
             
             events.append(event)
@@ -474,6 +489,148 @@ def parse_forex_factory_events(raw_events):
     events.sort(key=lambda x: (x["date"], x["time"]))
     
     return events[:50]  # 限制最多50个事件
+
+def supplement_actual_values(events):
+    """为已发生的事件补充实际值"""
+    if not events:
+        return events
+    
+    # 找出今天已发生但还没有实际值的事件
+    today_events_needing_update = []
+    beijing_timezone = timezone(timedelta(hours=8))
+    now_beijing = datetime.now(beijing_timezone)
+    today = now_beijing.date()
+    
+    for event in events:
+        if (event.get("needs_actual_update") and 
+            event.get("date") == str(today) and
+            event.get("actual") in ["待发布", "N/A"]):
+            today_events_needing_update.append(event)
+    
+    if not today_events_needing_update:
+        logger.info("没有需要更新实际值的事件")
+        return events
+    
+    logger.info(f"找到 {len(today_events_needing_update)} 个需要更新实际值的事件")
+    
+    try:
+        # 获取今天Forex Factory日历页面
+        today_str = today.strftime("%b%d.%Y").lower()  # 格式如: oct25.2024
+        url = f"{config.forex_factory_base_url}/calendar?day={today_str}"
+        
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.5',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1',
+            'Cache-Control': 'max-age=0',
+            'Referer': 'https://www.forexfactory.com/'
+        }
+        
+        response = requests.get(url, headers=headers, timeout=30)
+        
+        if response.status_code == 200:
+            # 解析HTML，提取实际值
+            actual_values = extract_actual_values_from_html(response.text, today_events_needing_update)
+            
+            # 更新事件的实际值
+            updated_count = 0
+            for event in events:
+                event_key = f"{event['time']}_{event['name'][:30]}"
+                if event_key in actual_values:
+                    event['actual'] = actual_values[event_key]
+                    event['source'] = "Forex Factory (实际值来自网页抓取)"
+                    updated_count += 1
+            
+            logger.info(f"成功更新 {updated_count} 个事件的实际值")
+        else:
+            logger.warning(f"获取Forex Factory页面失败，状态码: {response.status_code}")
+            
+    except Exception as e:
+        logger.error(f"补充实际值时出错: {e}")
+    
+    return events
+
+def extract_actual_values_from_html(html_content, events_needing_update):
+    """从HTML中提取实际值"""
+    actual_values = {}
+    
+    try:
+        soup = BeautifulSoup(html_content, 'html.parser')
+        
+        # 查找日历表格
+        calendar_table = soup.find('table', class_='calendar__table')
+        if not calendar_table:
+            calendar_table = soup.find('table', class_='calendar')
+        
+        if not calendar_table:
+            logger.warning("未找到日历表格")
+            return actual_values
+        
+        # 获取所有行
+        rows = calendar_table.find_all('tr', class_='calendar__row')
+        
+        for row in rows:
+            # 跳过表头行
+            if 'calendar__row--header' in row.get('class', []):
+                continue
+            
+            # 提取时间
+            time_cell = row.find('td', class_='calendar__time')
+            if not time_cell:
+                continue
+            
+            time_text = time_cell.get_text(strip=True)
+            if not time_text or time_text.lower() in ['all day', 'tentative']:
+                continue
+            
+            # 解析时间（格式如: "02:00" 或 "02:00a"）
+            time_match = re.search(r'(\d{1,2}):(\d{2})\s*([ap]?)', time_text, re.IGNORECASE)
+            if not time_match:
+                continue
+            
+            hour = int(time_match.group(1))
+            minute = int(time_match.group(2))
+            period = time_match.group(3).lower()
+            
+            # 转换为24小时制
+            if period == 'p' and hour < 12:
+                hour += 12
+            elif period == 'a' and hour == 12:
+                hour = 0
+            
+            # 格式化时间字符串
+            time_str = f"{hour:02d}:{minute:02d}"
+            
+            # 提取事件名称
+            event_cell = row.find('td', class_='calendar__event')
+            event_name = ""
+            if event_cell:
+                event_span = event_cell.find('span', class_='calendar__event-title')
+                if event_span:
+                    event_name = event_span.get_text(strip=True)
+            
+            if not event_name:
+                continue
+            
+            # 提取实际值
+            actual_cell = row.find('td', class_='calendar__actual')
+            actual_value = "N/A"
+            if actual_cell:
+                actual_text = actual_cell.get_text(strip=True)
+                if actual_text and actual_text.lower() not in ['', 'n/a', 'null']:
+                    actual_value = actual_text
+            
+            # 创建键（时间_事件名称前30字符）
+            event_key = f"{time_str}_{event_name[:30]}"
+            actual_values[event_key] = actual_value
+            
+    except Exception as e:
+        logger.error(f"解析HTML提取实际值时出错: {e}")
+    
+    return actual_values
 
 def map_impact_to_importance(impact):
     """映射影响级别到重要性数值"""
@@ -551,7 +708,7 @@ def get_country_code_from_currency(country_str):
         "EU": "EU", "EURO": "EU", "EZ": "EU", "EUROZONE": "EU",
         "UK": "GB", "GB": "GB", "GBR": "GB", "UNITED KINGDOM": "GB",
         "JP": "JP", "JPN": "JP", "JAPAN": "JP",
-        "AU": "AU", "AUS": "AU", "AUSTRERALIA": "AU",
+        "AU": "AU", "AUS": "AU", "AUSTRALIA": "AU",
         "CA": "CA", "CAN": "CA", "CANADA": "CA",
         "CH": "CH", "CHE": "CH", "SWITZERLAND": "CH",
         "CN": "CN", "CHN": "CN", "CHINA": "CN",
@@ -567,7 +724,7 @@ def get_country_code_from_currency(country_str):
         "DK": "DK", "DNK": "DK", "DENMARK": "DK",
         "TR": "TR", "TUR": "TR", "TURKEY": "TR",
         "PL": "PL", "POL": "PL", "POLAND": "PL",
-        "HK": "HK", "HKG": "HK", "HONG KING": "HK",
+        "HK": "HK", "HKG": "HK", "HONG KONG": "HK",
         "SG": "SG", "SGP": "SG", "SINGAPORE": "SG",
         "TH": "TH", "THA": "TH", "THAILAND": "TH",
         "ID": "ID", "IDN": "ID", "INDONESIA": "ID"
@@ -726,6 +883,7 @@ def generate_ai_analysis_for_event(event, signals=None, rates=None):
 - 时间：{event.get('date', '')} {event.get('time', '')}（北京时间）
 - 预测值：{event.get('forecast', 'N/A')}
 - 前值：{event.get('previous', 'N/A')}
+- 实际值：{event.get('actual', 'N/A')}
 - 重要性：{event.get('importance', 1)}级
 {price_context}
 
@@ -741,7 +899,6 @@ def generate_ai_analysis_for_event(event, signals=None, rates=None):
             "Content-Type": "application/json"
         }
         
-        # 修复：使用正确的模型名称
         request_body = {
             "model": "gpt-5.2",  
             "messages": [
@@ -820,7 +977,7 @@ def add_ai_analysis_to_events(events, signals=None, rates=None):
 
 def fetch_economic_calendar(signals=None, rates=None):
     """获取财经日历"""
-    # 获取原始事件
+    # 获取原始事件（包含实际值补充）
     events = fetch_calendar_forex_factory()
     
     # 为重要事件添加AI分析
@@ -902,7 +1059,6 @@ def generate_comprehensive_analysis_with_sections(signals, rates, events):
             "Content-Type": "application/json"
         }
         
-        # 修复：使用正确的模型名称和参数
         request_body = {
             "model": "gpt-5.2",  
             "messages": [
@@ -1196,7 +1352,7 @@ def execute_data_update():
         logger.info("阶段2/4: 获取实时汇率...")
         rates = fetch_forex_rates_alpha_vantage(signals)
 
-        # 3. 获取财经日历数据
+        # 3. 获取财经日历数据（包含实际值补充）
         logger.info("阶段3/4: 获取财经日历...")
         events = fetch_economic_calendar(signals, rates)
 
@@ -1282,11 +1438,11 @@ def index():
     return jsonify({
         "status": "running",
         "service": "宏观经济AI分析工具（实时版）",
-        "version": "5.6",
+        "version": "5.8",
         "data_sources": {
             "market_signals": "Ziwox",
             "forex_rates": "Alpha Vantage + Ziwox补充",
-            "economic_calendar": "Forex Factory JSON API",
+            "economic_calendar": "Forex Factory JSON API (实际值网页补充)",
             "ai_analysis": "laozhang.ai（gpt-5.2模型）"
         },
         "special_pairs": ["XAU/USD (黄金)", "XAG/USD (白银)", "BTC/USD (比特币)"],
@@ -1361,6 +1517,9 @@ def get_today_events():
     medium_impact = len([e for e in events if e.get('importance', 1) == 2])
     low_impact = len([e for e in events if e.get('importance', 1) == 1])
     
+    # 统计实际值更新情况
+    events_with_actual = len([e for e in events if e.get('actual', 'N/A') not in ['N/A', '待发布']])
+    
     return jsonify({
         "status": "success",
         "data": events,
@@ -1371,9 +1530,13 @@ def get_today_events():
             "low": low_impact,
             "total": total_events
         },
+        "actual_stats": {
+            "with_actual": events_with_actual,
+            "total": total_events
+        },
         "generated_at": datetime.now(timezone(timedelta(hours=8))).isoformat(),
         "timezone": "北京时间 (UTC+8)",
-        "note": "事件AI分析基于实时价格数据"
+        "note": "事件基本信息来自Forex Factory JSON API，实际值从网页实时补充"
     })
 
 @app.route('/api/summary')
@@ -1434,7 +1597,7 @@ def get_today_summary():
         "ai_enabled": config.enable_ai,
         "ai_model": "gpt-5.2",
         "timezone": "北京时间 (UTC+8)",
-        "note": "分析基于最新实时行情数据，每30分钟自动更新"
+        "note": "分析基于最新实时行情数据，每30分钟自动更新，实际值实时抓取"
     })
 
 @app.route('/api/currency_pairs/summary')
@@ -1459,7 +1622,7 @@ def get_market_signals():
         "source": "Ziwox",
         "special_pairs": [
             {"pair": "XAUUSD", "name": "黄金/美元", "type": "贵金属"},
-            {"pair": "XAGUSD", "name": "白银/美元", "type": "贵金属"},
+            {"pair": "XAGUSD", {"name": "白银/美元", "type": "贵金属"},
             {"pair": "BTCUSD", "name": "比特币/美元", "type": "加密货币"}
         ]
     })
@@ -1492,6 +1655,9 @@ def get_overview():
     medium_count = len([e for e in events if e.get('importance', 1) == 2])
     low_count = len([e for e in events if e.get('importance', 1) == 1])
     
+    # 统计实际值情况
+    events_with_actual = len([e for e in events if e.get('actual', 'N/A') not in ['N/A', '待发布']])
+    
     # 检查AI分析内容
     has_real_ai = False
     if store.summary_sections:
@@ -1513,6 +1679,10 @@ def get_overview():
             "medium": medium_count,
             "low": low_count
         },
+        "actual_values": {
+            "with_actual": events_with_actual,
+            "total": len(events)
+        },
         "ai_status": {
             "enabled": config.enable_ai,
             "model": "gpt-5.2",
@@ -1527,12 +1697,12 @@ def get_overview():
 if __name__ == '__main__':
     logger.info("="*60)
     logger.info("启动宏观经济AI分析工具（实时数据版）")
-    logger.info(f"财经日历源: Forex Factory JSON API")
+    logger.info(f"财经日历源: Forex Factory JSON API + 网页实际值补充")
     logger.info(f"AI分析服务: laozhang.ai（gpt-5.2模型）")
     logger.info(f"特殊品种: XAU/USD (黄金), XAG/USD (白银), BTC/USD (比特币)")
     logger.info(f"时区: 北京时间 (UTC+8)")
     logger.info(f"AI模型: gpt-5.2")
-    logger.info("注意: AI分析将基于实时价格数据生成")
+    logger.info("注意: 事件基本信息来自JSON API，实际值从网页实时补充")
     logger.info("="*60)
 
     # 首次启动时获取数据
