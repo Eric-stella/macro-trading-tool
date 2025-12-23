@@ -162,10 +162,10 @@ class DataStore:
         self.last_update_error = None
         self.individual_ai_analysis = {}  # 存储每个事件的AI分析
         self.summary_sections = {     # Summary页面的各个部分
-            "market": "",
-            "events": "",
-            "outlook": "",
-            "risks": ""
+            "market": "【市场概况】等待AI分析生成...",
+            "events": "【事件分析】等待AI分析生成...",
+            "outlook": "【货币对展望】等待AI分析生成...",
+            "risks": "【风险提示】等待AI分析生成..."
         }
         self.currency_pairs_summary = []  # 货币对摘要信息
         self.last_ai_generated = None     # 上次AI生成时间
@@ -1431,12 +1431,7 @@ def execute_data_update(generate_ai=False):
         else:
             logger.info("阶段4/4: 跳过AI分析生成...")
             # 如果已有分析数据，保留原有分析
-            sections = store.summary_sections or {
-                "market": "【市场概况】市场数据已更新，AI分析将在指定时间生成",
-                "events": "【事件分析】财经日历已更新，包含实际值",
-                "outlook": "【货币对展望】实时价格已刷新",
-                "risks": "【风险提示】数据更新完成，请关注市场变化"
-            }
+            sections = store.summary_sections
         
         # 5. 生成货币对摘要
         logger.info("阶段5/5: 生成货币对摘要...")
@@ -1446,6 +1441,7 @@ def execute_data_update(generate_ai=False):
         store.update_all(signals, rates, events, "实时数据报告", sections, None, currency_pairs_summary)
 
         logger.info(f"数据更新成功完成:")
+        logger.info(f"  - 生成AI分析: {'是' if generate_ai else '否'}")
         logger.info(f"  - 市场信号: {len(signals)} 个")
         logger.info(f"  - 汇率数据: {len(rates)} 个")
         logger.info(f"  - 财经日历: {len(events)} 个")
@@ -1477,44 +1473,43 @@ def background_data_update(generate_ai=False):
         store.set_updating(False, str(e))
 
 # ============================================================================
-# 定时任务调度 - 简化版
+# 定时任务调度 - 完全分离版
 # ============================================================================
 scheduler = BackgroundScheduler()
 
-def scheduled_data_update():
-    """定时任务包装函数"""
+def scheduled_base_data_update():
+    """基础数据更新定时任务（不生成AI分析）"""
     if store.is_updating:
-        logger.info("系统正在手动更新中，跳过此次定时任务。")
+        logger.info("系统正在更新中，跳过此次基础数据更新。")
         return
     
-    # 检查当前时间是否在AI生成时间范围内
-    beijing_now = datetime.now(timezone(timedelta(hours=8)))
-    current_hour = beijing_now.hour
-    
-    # 检查是否在AI生成时间
-    generate_ai = current_hour in config.ai_generate_hours
-    
-    logger.info(f"定时任务触发数据更新，生成AI分析: {'是' if generate_ai else '否'}")
-    success = execute_data_update(generate_ai)
+    logger.info("定时任务触发基础数据更新（不生成AI分析）")
+    success = execute_data_update(generate_ai=False)  # 明确不生成AI
     if not success:
-        logger.error("定时任务更新失败")
+        logger.error("基础数据更新失败")
 
-# 基础数据更新：每30分钟一次（不生成AI分析）
+def scheduled_ai_analysis_update():
+    """AI分析更新定时任务（生成AI分析）"""
+    if store.is_updating:
+        logger.info("系统正在更新中，跳过此次AI分析更新。")
+        return
+    
+    logger.info("定时任务触发AI分析更新（生成AI分析）")
+    success = execute_data_update(generate_ai=True)  # 明确生成AI
+    if not success:
+        logger.error("AI分析更新失败")
+
+# 基础数据更新：每30分钟一次（明确不生成AI分析）
 scheduler.add_job(
-    scheduled_data_update,
+    scheduled_base_data_update,
     'interval',
     minutes=30,
-    id='data_update_30min',
-    name='基础数据更新（每30分钟）'
+    id='base_data_update_30min',
+    name='基础数据更新（每30分钟，不生成AI分析）'
 )
 
-# 特定时间触发（北京时间）
-# 由于APScheduler使用UTC时间，需要转换
-# 北京时间 5:00 = UTC 21:00 (前一天)
-# 北京时间 9:00 = UTC 1:00
-# 北京时间 15:00 = UTC 7:00
-# 北京时间 23:00 = UTC 15:00
-
+# 特定时间触发AI分析（北京时间）
+# 转换为UTC时间
 ai_schedule_times = [
     (21, 0),  # 5:00 北京时间
     (1, 0),   # 9:00 北京时间
@@ -1524,7 +1519,7 @@ ai_schedule_times = [
 
 for i, (utc_hour, utc_minute) in enumerate(ai_schedule_times):
     scheduler.add_job(
-        scheduled_data_update,
+        scheduled_ai_analysis_update,  # 使用专门的AI更新函数
         'cron',
         hour=utc_hour,
         minute=utc_minute,
@@ -1542,7 +1537,7 @@ def index():
     return jsonify({
         "status": "running",
         "service": "宏观经济AI分析工具（实时版）",
-        "version": "6.1",
+        "version": "6.2",
         "data_sources": {
             "market_signals": "Ziwox",
             "forex_rates": "Alpha Vantage + Ziwox补充",
@@ -1662,47 +1657,8 @@ def get_today_events():
 
 @app.route('/api/summary')
 def get_today_summary():
-    """获取今日总结"""
-    # 如果AI分析数据为空或为默认内容，检查是否需要重新生成
+    """获取今日总结 - 修复版：只返回已有分析，不重新生成"""
     sections = store.summary_sections
-    
-    # 检查是否是默认的占位内容
-    is_default_content = False
-    default_markers = [
-        "正在分析实时市场数据",
-        "AI分析内容生成中",
-        "等待AI分析生成",
-        "AI分析生成失败"
-    ]
-    
-    for section_content in sections.values():
-        if any(marker in section_content for marker in default_markers):
-            is_default_content = True
-            break
-    
-    # 如果是默认内容或空，检查当前时间是否应该生成AI
-    if is_default_content or not any(sections.values()):
-        beijing_now = datetime.now(timezone(timedelta(hours=8)))
-        current_hour = beijing_now.hour
-        
-        if current_hour in config.ai_generate_hours:
-            logger.info("检测到默认AI分析内容，且当前是AI生成时间，重新生成...")
-            try:
-                # 使用当前数据生成分析
-                analysis_result = generate_comprehensive_analysis_with_sections(
-                    store.market_signals, 
-                    store.forex_rates, 
-                    store.economic_events
-                )
-                if analysis_result and analysis_result.get("sections"):
-                    sections = analysis_result["sections"]
-                    store.summary_sections = sections
-                    store.set_ai_generated_time()
-                    logger.info("重新生成AI分析成功")
-                else:
-                    logger.warning("重新生成AI分析返回空结果")
-            except Exception as e:
-                logger.error(f"重新生成AI分析失败: {e}")
     
     # 确保货币对摘要不为空
     currency_pairs = store.currency_pairs_summary
@@ -1787,7 +1743,7 @@ def get_overview():
     has_real_ai = False
     if store.summary_sections:
         for section_content in store.summary_sections.values():
-            if section_content and len(section_content) > 50 and "AI分析生成" not in section_content:
+            if section_content and len(section_content) > 50 and "等待AI分析生成" not in section_content:
                 has_real_ai = True
                 break
     
@@ -1826,41 +1782,28 @@ def get_overview():
 # ============================================================================
 if __name__ == '__main__':
     logger.info("="*60)
-    logger.info("启动宏观经济AI分析工具（实时数据版）v6.1")
+    logger.info("启动宏观经济AI分析工具（实时数据版）v6.2")
     logger.info(f"财经日历源: Forex Factory JSON API + 网页抓取")
     logger.info(f"AI分析服务: laozhang.ai（gpt-5.2模型）")
     logger.info(f"特殊品种: XAU/USD (黄金), XAG/USD (白银), BTC/USD (比特币)")
     logger.info(f"时区: 北京时间 (UTC+8)")
     logger.info(f"AI分析时间: {', '.join([f'{h}:00' for h in config.ai_generate_hours])}")
-    logger.info(f"基础数据更新: 每30分钟")
+    logger.info(f"基础数据更新: 每30分钟（不生成AI分析）")
     logger.info(f"手动刷新: 只更新数据，不生成AI分析")
-    logger.info("注意: AI分析将在指定时间自动生成以节省API调用")
+    logger.info("注意: AI分析只在指定时间自动生成以节省API调用")
     logger.info("="*60)
 
-    # 首次启动时获取数据（不生成AI分析，节省成本）
+    # 首次启动时获取数据（生成AI分析）
     try:
-        logger.info("首次启动，正在获取实时数据（不生成AI分析）...")
-        success = execute_data_update(generate_ai=False)
+        logger.info("首次启动，正在获取实时数据（包含AI分析）...")
+        success = execute_data_update(generate_ai=True)
         if success:
             logger.info("初始实时数据获取成功")
             events = store.economic_events
             currency_pairs = store.currency_pairs_summary
             logger.info(f"事件总数: {len(events)}")
             logger.info(f"货币对摘要数: {len(currency_pairs)}")
-            
-            # 检查当前时间是否应该生成AI分析
-            beijing_now = datetime.now(timezone(timedelta(hours=8)))
-            current_hour = beijing_now.hour
-            
-            if current_hour in config.ai_generate_hours:
-                logger.info(f"当前时间 {current_hour}:00 在AI生成时间范围内，生成AI分析...")
-                ai_success = execute_data_update(generate_ai=True)
-                if ai_success:
-                    logger.info("首次AI分析生成成功")
-                else:
-                    logger.warning("首次AI分析生成失败")
-            else:
-                logger.info(f"当前时间 {current_hour}:00 不在AI生成时间范围内，跳过AI分析")
+            logger.info(f"AI分析生成: {'成功' if store.last_ai_generated else '失败'}")
         else:
             logger.warning("初始数据获取失败，但服务已启动")
     except Exception as e:
