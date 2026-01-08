@@ -750,7 +750,7 @@ def get_currency_from_country(country_str):
         "PL": "PLN", "POL": "PLN",
         "HK": "HKD", "HKG": "HKD",
         "SG": "SGD", "SGP": "SGD",
-        "TH": "THB", "THA": "THB,
+        "TH": "THB", "THA": "THB",
         "ID": "IDR", "IDN": "IDR"
     }
     
