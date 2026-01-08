@@ -13,7 +13,6 @@ from datetime import datetime, timedelta, timezone
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 from apscheduler.schedulers.background import BackgroundScheduler
-from apscheduler.triggers.cron import CronTrigger
 import requests
 from alpha_vantage.foreignexchange import ForeignExchange
 from bs4 import BeautifulSoup
@@ -687,7 +686,7 @@ def fetch_economic_calendar(signals=None, rates=None, generate_event_ai=False):
             updated_count = match_and_update_actual_values(events, actual_values_map)
             logger.info(f"成功更新 {updated_count} 个事件的实际值")
     
-    # 只为重要事件添加AI分析（仅在需要时生成）
+    # 为重要事件添加AI分析（仅在需要时生成）
     if generate_event_ai and config.enable_ai:
         events_with_ai = add_ai_analysis_to_events(events, signals, rates)
     else:
@@ -751,7 +750,7 @@ def get_currency_from_country(country_str):
         "PL": "PLN", "POL": "PLN",
         "HK": "HKD", "HKG": "HKD",
         "SG": "SGD", "SGP": "SGD",
-        "TH": "THB", "THA": "THB",
+        "TH": "THB", "THA": "THB,
         "ID": "IDR", "IDN": "IDR"
     }
     
@@ -925,10 +924,6 @@ def generate_ai_analysis_for_event(event, signals=None, rates=None):
                 else:
                     unavailable_pairs.append(pair)
         
-        # 记录日志
-        logger.info(f"事件 '{event_name}' 相关货币对: {related_pairs}")
-        logger.info(f"可用价格: {real_time_prices}")
-        
         # 构建提示词
         price_context = ""
         if real_time_prices:
@@ -971,7 +966,6 @@ def generate_ai_analysis_for_event(event, signals=None, rates=None):
             "Content-Type": "application/json"
         }
         
-        # 修复：使用正确的模型名称
         request_body = {
             "model": "gpt-5.2",  
             "messages": [
@@ -986,27 +980,13 @@ def generate_ai_analysis_for_event(event, signals=None, rates=None):
             f"{config.openai_base_url}/chat/completions",
             headers=headers,
             json=request_body,
-            timeout=45  # 增加超时时间
+            timeout=45
         )
 
         if response.status_code == 200:
             result = response.json()
             if 'choices' in result and len(result['choices']) > 0:
                 ai_content = result['choices'][0]['message']['content']
-                
-                # 检查分析中是否包含正确的价格信息
-                has_price_reference = False
-                if real_time_prices:
-                    for price_info in real_time_prices:
-                        pair, price = price_info.split(": ")
-                        if price in ai_content:
-                            has_price_reference = True
-                            break
-                
-                # 如果没有引用价格，添加价格说明
-                if real_time_prices and not has_price_reference:
-                    price_summary = '，'.join(real_time_prices)
-                    ai_content = f"（当前价格：{price_summary}）\n{ai_content}"
                 
                 return f"【AI分析】{ai_content}"
             else:
@@ -1119,14 +1099,13 @@ def generate_comprehensive_analysis_with_sections(signals, rates, events):
             "Content-Type": "application/json"
         }
         
-        # 修复：使用正确的模型名称和参数
         request_body = {
             "model": "gpt-5.2",  
             "messages": [
                 {"role": "system", "content": "你是一位经验丰富的外汇和贵金属交易员，擅长给出结构化、清晰、可执行的技术分析。请严格按照用户要求的四个章节格式输出，不要遗漏任何章节。基于提供的实时价格数据进行分析。"},
                 {"role": "user", "content": prompt}
             ],
-            "max_tokens": 2000,  # 增加token限制
+            "max_tokens": 2000,
             "temperature": 0.4
         }
 
@@ -1134,7 +1113,7 @@ def generate_comprehensive_analysis_with_sections(signals, rates, events):
             f"{config.openai_base_url}/chat/completions",
             headers=headers,
             json=request_body,
-            timeout=90  # 增加超时时间
+            timeout=90
         )
 
         if response.status_code == 200:
@@ -1144,19 +1123,16 @@ def generate_comprehensive_analysis_with_sections(signals, rates, events):
             if 'choices' in result and len(result['choices']) > 0:
                 ai_content = result['choices'][0]['message']['content']
                 logger.info(f"AI响应成功，内容长度: {len(ai_content)}")
-                logger.info(f"AI响应内容前500字符: {ai_content[:500]}")
                 
                 # 解析AI回复，分章节
                 sections = parse_ai_response_into_sections_enhanced(ai_content)
-                logger.info(f"解析后的章节: {json.dumps(sections, ensure_ascii=False, indent=2)}")
                 
                 # 验证章节内容
                 valid_sections = validate_and_fix_sections(sections, ai_content)
                 
                 return {
                     "summary": "基于实时数据的AI分析报告已生成",
-                    "sections": valid_sections,
-                    "raw_ai_content": ai_content[:1000]  # 保存部分原始内容用于调试
+                    "sections": valid_sections
                 }
             else:
                 logger.error(f"AI响应中没有choices: {result}")
@@ -1189,7 +1165,7 @@ def parse_ai_response_into_sections_enhanced(ai_content):
     # 清理内容
     content = ai_content.strip()
     
-    # 方法1：尝试按明确的章节标题分割（支持多种格式）
+    # 方法1：尝试按明确的章节标题分割
     section_patterns = {
         "market": [
             r"1[\.、]?\s*【?市场概况】?[:：]?\s*",
@@ -1252,56 +1228,6 @@ def parse_ai_response_into_sections_enhanced(ai_content):
             # 确保内容不为空
             if section_content and len(section_content) > 20:
                 sections[section_name] = section_content
-                logger.info(f"章节 '{section_name}' 内容长度: {len(section_content)}")
-    
-    # 方法2：如果上述方法失败，尝试按明确的章节分割线分割
-    if all(not v for v in sections.values()):
-        logger.info("方法1失败，尝试按章节分割线分割...")
-        
-        # 尝试查找明显的章节分割
-        chapter_markers = [
-            ("市场概况", "market"),
-            ("事件分析", "events"),
-            ("货币对展望", "outlook"),
-            ("风险提示", "risks")
-        ]
-        
-        for marker, section_name in chapter_markers:
-            # 查找章节开始
-            pattern = rf"(?:^|\n)(?:#+\s*)?{marker}[:：]?\s*\n"
-            match = re.search(pattern, content, re.IGNORECASE | re.MULTILINE)
-            if match:
-                start_pos = match.end()
-                
-                # 查找下一个章节或文本结束
-                next_pos = len(content)
-                for next_marker, _ in chapter_markers:
-                    if next_marker != marker:
-                        pattern2 = rf"(?:^|\n)(?:#+\s*)?{next_marker}[:：]?\s*\n"
-                        match2 = re.search(pattern2, content[start_pos:], re.IGNORECASE | re.MULTILINE)
-                        if match2:
-                            next_pos = start_pos + match2.start()
-                            break
-                
-                section_content = content[start_pos:next_pos].strip()
-                if section_content and len(section_content) > 20:
-                    sections[section_name] = section_content
-    
-    # 方法3：如果还是失败，尝试按段落分割
-    if all(not v for v in sections.values()):
-        logger.info("方法2失败，尝试按段落分割...")
-        paragraphs = [p.strip() for p in content.split('\n\n') if p.strip()]
-        
-        if len(paragraphs) >= 4:
-            for i, para in enumerate(paragraphs[:4]):
-                if i == 0 and len(para) > 30:
-                    sections["market"] = para
-                elif i == 1 and len(para) > 30:
-                    sections["events"] = para
-                elif i == 2 and len(para) > 30:
-                    sections["outlook"] = para
-                elif i == 3 and len(para) > 30:
-                    sections["risks"] = para
     
     return sections
 
@@ -1310,29 +1236,13 @@ def validate_and_fix_sections(sections, original_content=None):
     # 检查每个章节是否有内容
     for section_name in ["market", "events", "outlook", "risks"]:
         if not sections.get(section_name) or len(sections[section_name].strip()) < 30:
-            # 如果内容太少，尝试从原始内容中提取
-            if original_content and len(original_content) > 100:
-                # 简单地将内容分成四部分
-                content_length = len(original_content)
-                part_length = content_length // 4
-                
-                if section_name == "market":
-                    sections["market"] = original_content[:part_length]
-                elif section_name == "events":
-                    sections["events"] = original_content[part_length:part_length*2]
-                elif section_name == "outlook":
-                    sections["outlook"] = original_content[part_length*2:part_length*3]
-                elif section_name == "risks":
-                    sections["risks"] = original_content[part_length*3:]
-            else:
-                # 使用更具体的默认内容
-                default_content = {
-                    "market": "【市场概况】基于当前市场数据，主要货币对价格显示市场处于调整阶段。实时价格反映投资者对经济数据的预期变化。",
-                    "events": "【事件分析】本周重要经济事件将影响相关货币走势。关注数据发布前后的市场波动，这些事件可能为交易提供机会。",
-                    "outlook": "【货币对展望】基于实时价格水平，主要货币对呈现不同的技术形态。黄金、白银等贵金属价格走势需要特别关注突破方向。",
-                    "risks": "【风险提示】当前市场存在数据发布风险和流动性变化。建议交易者控制仓位，设置合理止损，密切关注市场情绪变化。"
-                }
-                sections[section_name] = default_content.get(section_name, "等待AI分析生成...")
+            default_content = {
+                "market": "【市场概况】基于当前市场数据，主要货币对价格显示市场处于调整阶段。实时价格反映投资者对经济数据的预期变化。",
+                "events": "【事件分析】本周重要经济事件将影响相关货币走势。关注数据发布前后的市场波动，这些事件可能为交易提供机会。",
+                "outlook": "【货币对展望】基于实时价格水平，主要货币对呈现不同的技术形态。黄金、白银等贵金属价格走势需要特别关注突破方向。",
+                "risks": "【风险提示】当前市场存在数据发布风险和流动性变化。建议交易者控制仓位，设置合理止损，密切关注市场情绪变化。"
+            }
+            sections[section_name] = default_content.get(section_name, "等待AI分析生成...")
     
     return sections
 
@@ -1414,9 +1324,14 @@ def execute_data_update(generate_ai=False):
         logger.info("阶段2/4: 获取实时汇率...")
         rates = fetch_forex_rates_alpha_vantage(signals)
 
-        # 3. 获取财经日历数据 - 只在生成AI分析时才生成事件AI分析
+        # 3. 获取财经日历数据 - 关键修复：无论是否生成AI分析，都要为事件生成AI分析
         logger.info("阶段3/4: 获取财经日历...")
-        events = fetch_economic_calendar(signals, rates, generate_event_ai=generate_ai)
+        if generate_ai and config.enable_ai:
+            # 在生成综合AI分析时，同时为事件生成AI分析
+            events = fetch_economic_calendar(signals, rates, generate_event_ai=True)
+        else:
+            # 基础数据更新时，也使用已有的事件AI分析，不生成新的
+            events = fetch_economic_calendar(signals, rates, generate_event_ai=False)
 
         # 4. 生成综合AI分析（分章节）- 只在需要时生成
         sections = {}
@@ -1429,7 +1344,6 @@ def execute_data_update(generate_ai=False):
                 logger.info("AI分析生成成功")
             except Exception as ai_error:
                 logger.error(f"AI分析生成失败: {ai_error}")
-                # 使用真正的AI分析失败后的备用内容
                 sections = {
                     "market": f"【市场概况】AI分析生成失败: {str(ai_error)[:100]}",
                     "events": "【事件分析】AI分析服务暂时不可用，请稍后刷新重试",
@@ -1518,7 +1432,6 @@ scheduler.add_job(
 
 # 特定时间触发AI分析（北京时间）
 # 修复时区转换：北京时间(UTC+8) -> UTC = 北京时间 - 8小时
-# 注意：APScheduler使用UTC时间
 ai_schedule_times_utc = [
     (21, 0),  # 北京时间5:00 -> UTC 21:00 (前一天的21点)
     (1, 0),   # 北京时间9:00 -> UTC 1:00
@@ -1552,7 +1465,7 @@ def index():
     return jsonify({
         "status": "running",
         "service": "宏观经济AI分析工具（实时版）",
-        "version": "7.0",
+        "version": "7.1",
         "data_sources": {
             "market_signals": "Ziwox",
             "forex_rates": "Alpha Vantage + Ziwox补充",
@@ -1835,7 +1748,7 @@ def debug_schedule():
 # ============================================================================
 if __name__ == '__main__':
     logger.info("="*60)
-    logger.info("启动宏观经济AI分析工具（实时数据版）v7.0")
+    logger.info("启动宏观经济AI分析工具（实时数据版）v7.1")
     logger.info(f"财经日历源: Forex Factory JSON API + 网页抓取")
     logger.info(f"AI分析服务: laozhang.ai（gpt-5.2模型）")
     logger.info(f"特殊品种: XAU/USD (黄金), XAG/USD (白银), BTC/USD (比特币)")
