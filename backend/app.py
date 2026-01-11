@@ -462,9 +462,12 @@ def parse_forex_factory_events(raw_events):
             currency = get_currency_from_country(country)
             country_code = get_country_code_from_currency(country)
             
+            # 为每个事件生成唯一ID，用于存储AI分析
+            event_id = f"{date_str_formatted}_{time_str}_{country_code}_{hash(title) % 10000:04d}"
+            
             # 构建事件对象
             event = {
-                "id": i + 1,
+                "id": event_id,  # 使用唯一ID
                 "date": date_str_formatted,
                 "time": time_str,
                 "country": country_code,
@@ -691,9 +694,12 @@ def fetch_economic_calendar(signals=None, rates=None, generate_event_ai=False):
         events_with_ai = add_ai_analysis_to_events(events, signals, rates)
     else:
         events_with_ai = events
-        # 如果没有生成AI分析，确保每个事件都有ai_analysis字段
+        # 如果没有生成AI分析，检查是否有缓存的AI分析
         for event in events_with_ai:
-            if 'ai_analysis' not in event:
+            event_id = event.get('id')
+            if event_id and event_id in store.individual_ai_analysis:
+                event['ai_analysis'] = store.individual_ai_analysis[event_id]
+            else:
                 event['ai_analysis'] = "【AI分析】等待AI分析生成..."
     
     return events_with_ai
@@ -1009,23 +1015,44 @@ def add_ai_analysis_to_events(events, signals=None, rates=None):
     if not events or not config.enable_ai:
         return events
     
-    # 只为重要性较高的事件生成AI分析
-    important_events = [e for e in events if e.get('importance', 1) >= 2][:10]
+    logger.info(f"开始为事件生成AI分析，共 {len(events)} 个事件")
     
-    for event in important_events:
+    # 只为重要性较高的事件生成AI分析
+    important_events = [e for e in events if e.get('importance', 1) >= 2]
+    
+    logger.info(f"筛选出 {len(important_events)} 个重要事件需要生成AI分析")
+    
+    # 限制最多为10个重要事件生成AI分析，避免API调用过多
+    important_events = important_events[:10]
+    
+    for i, event in enumerate(important_events):
         try:
+            logger.info(f"为事件 {i+1}/{len(important_events)} 生成AI分析: {event.get('name', '未知事件')}")
             ai_analysis = generate_ai_analysis_for_event(event, signals, rates)
             event['ai_analysis'] = ai_analysis
-            time.sleep(0.8)  # 增加延迟，避免API调用过于频繁
+            
+            # 存储到individual_ai_analysis字典中，使用事件ID作为键
+            event_id = event.get('id')
+            if event_id:
+                store.individual_ai_analysis[event_id] = ai_analysis
+                logger.info(f"事件AI分析已存储: {event_id[:20]}...")
+            
+            # 增加延迟，避免API调用过于频繁
+            if i < len(important_events) - 1:
+                time.sleep(1.5)  # 增加到1.5秒延迟
+                
         except Exception as e:
             logger.error(f"为事件生成AI分析失败: {e}")
             event['ai_analysis'] = "【AI分析】分析生成失败，请稍后重试"
     
     # 为其他事件添加默认AI分析
+    other_events_count = 0
     for event in events:
         if 'ai_analysis' not in event:
             event['ai_analysis'] = "【AI分析】该事件重要性较低，暂无详细分析。关注市场整体情绪和主要货币对走势。"
+            other_events_count += 1
     
+    logger.info(f"事件AI分析生成完成: {len(important_events)} 个重要事件已生成，{other_events_count} 个其他事件使用默认分析")
     return events
 
 # ============================================================================
@@ -1326,12 +1353,8 @@ def execute_data_update(generate_ai=False):
 
         # 3. 获取财经日历数据 - 关键修复：无论是否生成AI分析，都要为事件生成AI分析
         logger.info("阶段3/4: 获取财经日历...")
-        if generate_ai and config.enable_ai:
-            # 在生成综合AI分析时，同时为事件生成AI分析
-            events = fetch_economic_calendar(signals, rates, generate_event_ai=True)
-        else:
-            # 基础数据更新时，也使用已有的事件AI分析，不生成新的
-            events = fetch_economic_calendar(signals, rates, generate_event_ai=False)
+        # 在AI分析更新时，为事件生成AI分析
+        events = fetch_economic_calendar(signals, rates, generate_event_ai=generate_ai)
 
         # 4. 生成综合AI分析（分章节）- 只在需要时生成
         sections = {}
@@ -1367,6 +1390,7 @@ def execute_data_update(generate_ai=False):
         logger.info(f"  - 市场信号: {len(signals)} 个")
         logger.info(f"  - 汇率数据: {len(rates)} 个")
         logger.info(f"  - 财经日历: {len(events)} 个")
+        logger.info(f"  - 事件AI分析: {len([e for e in events if e.get('ai_analysis', '').startswith('【AI分析】') and '等待' not in e.get('ai_analysis', '')])} 个已生成")
         logger.info(f"  - AI分析章节: {len(sections)} 个")
         logger.info(f"  - 货币对摘要: {len(currency_pairs_summary)} 个")
         logger.info("="*60)
@@ -1566,6 +1590,9 @@ def get_today_events():
     # 统计实际值已公布的事件
     actual_available = len([e for e in events if e.get('actual', '待公布') not in ['待公布', 'N/A']])
     
+    # 统计已有AI分析的事件
+    ai_analysis_available = len([e for e in events if e.get('ai_analysis', '').startswith('【AI分析】') and '等待' not in e.get('ai_analysis', '')])
+    
     return jsonify({
         "status": "success",
         "data": events,
@@ -1580,8 +1607,14 @@ def get_today_events():
             "available": actual_available,
             "pending": total_events - actual_available
         },
+        "ai_analysis_stats": {
+            "available": ai_analysis_available,
+            "pending": total_events - ai_analysis_available
+        },
         "generated_at": datetime.now(timezone(timedelta(hours=8))).isoformat(),
         "timezone": "北京时间 (UTC+8)",
+        "ai_schedule": f"{', '.join([f'{h}:00' for h in config.ai_generate_hours_beijing])}",
+        "ai_update_count": store.ai_update_count,
         "note": "事件AI分析基于实时价格数据，实际值从Forex Factory网页抓取"
     })
 
@@ -1681,6 +1714,9 @@ def get_overview():
     # 统计实际值
     actual_available = len([e for e in events if e.get('actual', '待公布') not in ['待公布', 'N/A']])
     
+    # 统计已有AI分析的事件
+    events_with_ai = len([e for e in events if e.get('ai_analysis', '').startswith('【AI分析】') and '等待' not in e.get('ai_analysis', '')])
+    
     return jsonify({
         "status": "success",
         "timestamp": datetime.now(timezone(timedelta(hours=8))).isoformat(),
@@ -1697,6 +1733,10 @@ def get_overview():
         "actual_values": {
             "available": actual_available,
             "pending": len(events) - actual_available
+        },
+        "ai_analysis_status": {
+            "events_with_ai": events_with_ai,
+            "events_total": len(events)
         },
         "ai_status": {
             "enabled": config.enable_ai,
@@ -1748,15 +1788,15 @@ def debug_schedule():
 # ============================================================================
 if __name__ == '__main__':
     logger.info("="*60)
-    logger.info("启动宏观经济AI分析工具（实时数据版）v7.1")
+    logger.info("启动宏观经济AI分析工具（实时数据版）v7.2")
     logger.info(f"财经日历源: Forex Factory JSON API + 网页抓取")
     logger.info(f"AI分析服务: laozhang.ai（gpt-5.2模型）")
     logger.info(f"特殊品种: XAU/USD (黄金), XAG/USD (白银), BTC/USD (比特币)")
     logger.info(f"时区: 北京时间 (UTC+8)")
     logger.info(f"AI分析时间（北京时间）: {', '.join([f'{h}:00' for h in config.ai_generate_hours_beijing])}")
+    logger.info(f"事件AI分析: 与综合AI分析同时生成（每天4次）")
     logger.info(f"基础数据更新: 每30分钟（不生成AI分析）")
     logger.info(f"手动刷新: 只更新数据，不生成AI分析")
-    logger.info("注意: AI分析只在指定时间自动生成以节省API调用")
     logger.info("="*60)
 
     # 首次启动时获取数据（生成AI分析）
@@ -1771,6 +1811,10 @@ if __name__ == '__main__':
             logger.info(f"货币对摘要数: {len(currency_pairs)}")
             logger.info(f"AI分析生成: {'成功' if store.last_ai_generated else '失败'}")
             logger.info(f"AI更新次数: {store.ai_update_count}")
+            
+            # 统计已有AI分析的事件
+            events_with_ai = len([e for e in events if e.get('ai_analysis', '').startswith('【AI分析】') and '等待' not in e.get('ai_analysis', '')])
+            logger.info(f"事件AI分析生成: {events_with_ai}/{len(events)} 个事件")
         else:
             logger.warning("初始数据获取失败，但服务已启动")
     except Exception as e:
