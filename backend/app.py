@@ -170,6 +170,7 @@ class DataStore:
         self.currency_pairs_summary = []  # 货币对摘要信息
         self.last_ai_generated = None     # 上次AI生成时间
         self.ai_update_count = 0          # AI更新计数器，用于调试
+        self.last_data_update = None      # 上次数据更新时间（非AI）
 
     def update_all(self, signals, rates, events, analysis, summary_sections=None, individual_analysis=None, currency_pairs_summary=None):
         self.market_signals = signals
@@ -198,6 +199,11 @@ class DataStore:
         self.last_ai_generated = datetime.now()
         self.ai_update_count += 1
         logger.info(f"AI分析已生成，总生成次数: {self.ai_update_count}")
+        
+    def set_data_updated_time(self):
+        """设置数据更新时间（非AI）"""
+        self.last_data_update = datetime.now()
+        logger.info(f"数据已更新（非AI）: {self.last_data_update.strftime('%H:%M:%S')}")
 
 store = DataStore()
 
@@ -1375,15 +1381,21 @@ def execute_data_update(generate_ai=False):
                 }
         else:
             logger.info("阶段4/4: 跳过AI分析生成...")
-            # 如果已有分析数据，保留原有分析
+            # 不生成AI分析时，保留原有分析部分
             sections = store.summary_sections
         
-        # 5. 生成货币对摘要
+        # 5. 生成货币对摘要 - 无论是否生成AI分析，都重新生成货币对摘要
         logger.info("阶段5/5: 生成货币对摘要...")
         currency_pairs_summary = generate_currency_pairs_summary(signals, rates)
 
-        # 6. 存储数据
+        # 6. 存储数据 - 确保货币对摘要始终更新
         store.update_all(signals, rates, events, "实时数据报告", sections, None, currency_pairs_summary)
+        
+        # 7. 设置更新时间
+        if generate_ai:
+            store.set_ai_generated_time()
+        else:
+            store.set_data_updated_time()
 
         logger.info(f"数据更新成功完成:")
         logger.info(f"  - 生成AI分析: {'是' if generate_ai else '否'}")
@@ -1424,34 +1436,47 @@ def background_data_update(generate_ai=False):
 scheduler = BackgroundScheduler()
 
 def scheduled_base_data_update():
-    """基础数据更新定时任务（不生成AI分析）"""
+    """基础数据更新定时任务（每30分钟，更新所有数据但不生成AI分析）"""
     if store.is_updating:
         logger.info("系统正在更新中，跳过此次基础数据更新。")
         return
     
-    logger.info("定时任务触发基础数据更新（不生成AI分析）")
+    logger.info("="*40)
+    logger.info("定时任务触发基础数据更新（每30分钟，不生成AI分析）")
+    logger.info("更新时间: " + datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
+    
     success = execute_data_update(generate_ai=False)  # 明确不生成AI
     if not success:
         logger.error("基础数据更新失败")
+    
+    logger.info("基础数据更新完成")
+    logger.info("="*40)
 
 def scheduled_ai_analysis_update():
-    """AI分析更新定时任务（生成AI分析）"""
+    """AI分析更新定时任务（每天4次，生成AI分析）"""
     if store.is_updating:
         logger.info("系统正在更新中，跳过此次AI分析更新。")
         return
     
+    logger.info("="*40)
     logger.info("定时任务触发AI分析更新（生成AI分析）")
+    logger.info("更新时间: " + datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
+    
     success = execute_data_update(generate_ai=True)  # 明确生成AI
     if not success:
         logger.error("AI分析更新失败")
+    
+    logger.info("AI分析更新完成")
+    logger.info("="*40)
 
-# 基础数据更新：每30分钟一次（明确不生成AI分析）
+# 基础数据更新：每30分钟一次（明确不生成AI分析，但更新所有实时数据）
 scheduler.add_job(
     scheduled_base_data_update,
     'interval',
     minutes=30,
     id='base_data_update_30min',
-    name='基础数据更新（每30分钟，不生成AI分析）'
+    name='基础数据更新（每30分钟，不生成AI分析）',
+    next_run_time=datetime.now()  # 立即开始
 )
 
 # 特定时间触发AI分析（北京时间）
@@ -1489,7 +1514,7 @@ def index():
     return jsonify({
         "status": "running",
         "service": "宏观经济AI分析工具（实时版）",
-        "version": "7.1",
+        "version": "7.3",
         "data_sources": {
             "market_signals": "Ziwox",
             "forex_rates": "Alpha Vantage + Ziwox补充",
@@ -1504,6 +1529,7 @@ def index():
             "is_updating": store.is_updating,
             "last_updated": store.last_updated.isoformat() if store.last_updated else None,
             "last_ai_generated": store.last_ai_generated.isoformat() if store.last_ai_generated else None,
+            "last_data_update": store.last_data_update.isoformat() if store.last_data_update else None,
             "last_error": store.last_update_error
         }
     })
@@ -1532,6 +1558,7 @@ def get_api_status():
             "is_updating": store.is_updating,
             "last_updated": store.last_updated.isoformat() if store.last_updated else None,
             "last_ai_generated": store.last_ai_generated.isoformat() if store.last_ai_generated else None,
+            "last_data_update": store.last_data_update.isoformat() if store.last_data_update else None,
             "last_error": store.last_update_error,
             "data_counts": {
                 "market_signals": len(store.market_signals),
@@ -1643,6 +1670,7 @@ def get_today_summary():
         "ai_model": "gpt-5.2",
         "ai_schedule": f"{', '.join([f'{h}:00' for h in config.ai_generate_hours_beijing])}",
         "last_ai_generated": store.last_ai_generated.isoformat() if store.last_ai_generated else None,
+        "last_data_update": store.last_data_update.isoformat() if store.last_data_update else None,
         "ai_update_count": store.ai_update_count,
         "timezone": "北京时间 (UTC+8)",
         "note": "分析基于最新实时行情数据，AI分析在指定时间自动生成"
@@ -1744,6 +1772,7 @@ def get_overview():
             "has_real_analysis": has_real_ai,
             "sections_count": len(store.summary_sections) if store.summary_sections else 0,
             "last_generated": store.last_ai_generated.isoformat() if store.last_ai_generated else "从未生成",
+            "last_data_update": store.last_data_update.isoformat() if store.last_data_update else "从未更新",
             "ai_update_count": store.ai_update_count,
             "next_schedule": f"{', '.join([f'{h}:00' for h in config.ai_generate_hours_beijing])}"
         }
@@ -1779,7 +1808,8 @@ def debug_schedule():
         "jobs": job_list,
         "store_status": {
             "is_updating": store.is_updating,
-            "last_ai_generated": store.last_ai_generated.isoformat() if store.last_ai_generated else None
+            "last_ai_generated": store.last_ai_generated.isoformat() if store.last_ai_generated else None,
+            "last_data_update": store.last_data_update.isoformat() if store.last_data_update else None
         }
     })
 
@@ -1788,14 +1818,14 @@ def debug_schedule():
 # ============================================================================
 if __name__ == '__main__':
     logger.info("="*60)
-    logger.info("启动宏观经济AI分析工具（实时数据版）v7.2")
+    logger.info("启动宏观经济AI分析工具（实时数据版）v7.3")
     logger.info(f"财经日历源: Forex Factory JSON API + 网页抓取")
     logger.info(f"AI分析服务: laozhang.ai（gpt-5.2模型）")
     logger.info(f"特殊品种: XAU/USD (黄金), XAG/USD (白银), BTC/USD (比特币)")
     logger.info(f"时区: 北京时间 (UTC+8)")
     logger.info(f"AI分析时间（北京时间）: {', '.join([f'{h}:00' for h in config.ai_generate_hours_beijing])}")
+    logger.info(f"基础数据更新: 每30分钟（更新实时数据，不生成AI分析）")
     logger.info(f"事件AI分析: 与综合AI分析同时生成（每天4次）")
-    logger.info(f"基础数据更新: 每30分钟（不生成AI分析）")
     logger.info(f"手动刷新: 只更新数据，不生成AI分析")
     logger.info("="*60)
 
