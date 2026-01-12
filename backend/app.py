@@ -302,7 +302,7 @@ def fetch_forex_rates_alpha_vantage(ziwox_signals):
             fx = ForeignExchange(key=config.alpha_vantage_key)
 
             # 只处理前5个主要品种，避免API限制
-            limited_pairs = config.watch_currency_pairs[:5]
+            limited_pairs = config.watch_currency_pairs[:6]
 
             for i, pair in enumerate(limited_pairs):
                 try:
