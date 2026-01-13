@@ -37,23 +37,26 @@ class Config:
         # Alpha Vantage 配置
         self.alpha_vantage_key = os.getenv("ALPHA_VANTAGE_KEY", "2M66S0EB6ZMHO2ST")
 
-        # Ziwox API 配置
+        # Ziwox API 配置 (已弃用，保留以防参考)
         self.ziwox_api_key = os.getenv("ZIWOX_API_KEY", "B65991B99EB498AB")
         self.ziwox_api_url = "https://ziwox.com/terminal/services/API/V1/fulldata.php"
 
+        # Swissquote API 配置 (用于黄金和白银)
+        self.swissquote_api_base = "https://forex-data-feed.swissquote.com/public-quotes/bboquotes/instrument"
+        
         # 模式开关
         self.enable_ai = os.getenv("ENABLE_AI", "true").lower() == "true"
 
-        # 监控的货币对 - 修正版
+        # 监控的货币对 - 修正版 (注意：BTCUSD现在也通过Alpha Vantage获取)
         self.watch_currency_pairs = [
             'EURUSD', 'GBPUSD', 'USDCHF', 'USDCNH',
             'USDJPY', 'AUDUSD', 'XAUUSD', 'XAGUSD', 'BTCUSD'
         ]
 
-        # Ziwox需要小写参数
+        # Ziwox需要小写参数 (已弃用)
         self.ziwox_pairs = [pair.lower() for pair in self.watch_currency_pairs]
 
-        # Alpha Vantage特殊品种映射
+        # Alpha Vantage特殊品种映射 (保留，但BTCUSD现在会使用这个映射)
         self.av_special_pairs = {
             'XAUUSD': ('XAU', 'USD'),
             'XAGUSD': ('XAG', 'USD'),
@@ -153,8 +156,8 @@ config = Config()
 # ============================================================================
 class DataStore:
     def __init__(self):
-        self.market_signals = []      # Ziwox市场信号
-        self.forex_rates = {}         # Alpha Vantage汇率
+        self.market_signals = []      # Ziwox市场信号 (已弃用，暂时保留结构)
+        self.forex_rates = {}         # Alpha Vantage汇率 + Swissquote贵金属
         self.economic_events = []     # 财经日历事件
         self.daily_analysis = ""      # 每日AI综合分析
         self.last_updated = None
@@ -208,120 +211,119 @@ class DataStore:
 store = DataStore()
 
 # ============================================================================
-# 模块1：实时市场信号获取 (Ziwox)
+# 模块1：实时市场信号获取 (Ziwox) - 已弃用，仅保留函数结构
 # ============================================================================
 def fetch_market_signals_ziwox():
-    """从Ziwox获取市场交易信号数据"""
-    if not config.ziwox_api_key:
-        logger.error("Ziwox API密钥为空")
-        return []
+    """从Ziwox获取市场交易信号数据 (已弃用，返回空列表)"""
+    logger.warning("Ziwox数据源已弃用，返回空列表")
+    return []
 
-    all_signals = []
-
-    for pair in config.ziwox_pairs:
+# ============================================================================
+# 模块2：实时汇率获取 (Alpha Vantage + Swissquote)
+# ============================================================================
+def fetch_metal_rates_swissquote():
+    """从Swissquote API获取黄金和白银的实时汇率"""
+    metals = {}
+    
+    # 定义贵金属对和对应的API路径
+    metal_pairs = {
+        'XAUUSD': 'XAU/USD',
+        'XAGUSD': 'XAG/USD'
+    }
+    
+    for pair, instrument in metal_pairs.items():
         try:
-            params = {
-                'expn': 'ziwoxuser',
-                'apikey': config.ziwox_api_key,
-                'apitype': 'json',
-                'pair': pair
-            }
-
-            logger.info(f"正在从Ziwox获取 {pair.upper()} 的市场信号...")
+            url = f"{config.swissquote_api_base}/{instrument}"
+            logger.info(f"正在从Swissquote获取 {pair} 价格...")
+            
             response = requests.get(
-                config.ziwox_api_url,
-                params=params,
+                url,
                 headers={'User-Agent': 'MacroEconomicAI/1.0'},
                 timeout=15
             )
-
+            
             if response.status_code == 200:
-                data_list = response.json()
-
-                if isinstance(data_list, list) and len(data_list) > 0:
-                    raw_data = data_list[0]
-
-                    last_price = raw_data.get('Last Price', 'N/A')
-                    try:
-                        if last_price and last_price != 'N/A':
-                            price_float = float(last_price)
+                data = response.json()
+                
+                if isinstance(data, list) and len(data) > 0:
+                    # 查找包含"standard"价格档位的数据
+                    standard_price = None
+                    for item in data:
+                        spread_prices = item.get('spreadProfilePrices', [])
+                        for price_info in spread_prices:
+                            if price_info.get('spreadProfile') == 'standard':
+                                standard_price = price_info
+                                break
+                        if standard_price:
+                            break
+                    
+                    if standard_price:
+                        bid = standard_price.get('bid')
+                        ask = standard_price.get('ask')
+                        
+                        # 计算中间价作为rate
+                        if bid and ask:
+                            rate = (bid + ask) / 2
+                            
+                            metals[pair] = {
+                                'rate': rate,
+                                'bid': bid,
+                                'ask': ask,
+                                'last_refreshed': datetime.now().isoformat(),
+                                'source': 'Swissquote',
+                                'raw_bid': bid,
+                                'raw_ask': ask,
+                                'spread': ask - bid
+                            }
+                            logger.info(f"    ✓ Swissquote 成功获取 {pair}: {rate:.4f} (Bid: {bid}, Ask: {ask})")
                         else:
-                            price_float = 0
-                    except:
-                        price_float = 0
-
-                    signal = {
-                        'pair': pair.upper(),
-                        'last_price': price_float,
-                        'fundamental_bias': raw_data.get('Fundamental Bias', 'Neutral'),
-                        'fundamental_power': raw_data.get('Fundamental Power', '--'),
-                        'ai_bullish_forecast': raw_data.get('AI Bullish Forecast', '50'),
-                        'ai_bearish_forecast': raw_data.get('AI Bearish Forecast', '50'),
-                        'd1_trend': raw_data.get('D1 Trend', 'NEUTRAL'),
-                        'd1_rsi': raw_data.get('D1 RSI', '50'),
-                        'retail_long_ratio': raw_data.get('Retail Long Ratio', '50%'),
-                        'retail_short_ratio': raw_data.get('Retail Short Ratio', '50%'),
-                        'support_levels': raw_data.get('supports', '').split()[:3],
-                        'resistance_levels': raw_data.get('resistance', '').split()[:3],
-                        'pivot_points': raw_data.get('pivot', '').split()[:1],
-                        'risk_sentiment': raw_data.get('Risk Sentiment', 'Neutral'),
-                        'source': 'Ziwox',
-                        'fetched_at': datetime.now().isoformat()
-                    }
-                    all_signals.append(signal)
-                    logger.info(f"  成功解析 {pair.upper()} 的市场信号，价格: {price_float}")
-
+                            logger.warning(f"    Swissquote 返回的standard价格档位数据不完整: {standard_price}")
+                    else:
+                        logger.warning(f"    Swissquote 返回数据中没有找到standard价格档位")
+                else:
+                    logger.warning(f"    Swissquote 返回数据格式异常")
             else:
-                logger.warning(f"  请求 {pair.upper()} 数据失败，状态码: {response.status_code}")
-
-            time.sleep(0.5)
-
+                logger.warning(f"    Swissquote 请求 {pair} 失败，状态码: {response.status_code}")
+                
         except Exception as e:
-            logger.error(f"  获取 {pair} 数据时出错: {e}")
+            logger.error(f"    从Swissquote获取 {pair} 数据时出错: {str(e)}")
+            
+        # 避免请求过快
+        time.sleep(0.5)
+    
+    logger.info(f"Swissquote贵金属获取完成，共得到 {len(metals)} 个品种数据")
+    return metals
 
-    logger.info(f"Ziwox市场信号获取完成，共得到 {len(all_signals)} 个货币对数据")
-    return all_signals
-
-# ============================================================================
-# 模块2：实时汇率获取 (Alpha Vantage + Ziwox补充)
-# ============================================================================
-def fetch_forex_rates_alpha_vantage(ziwox_signals):
-    """从Alpha Vantage获取实时汇率，失败时从Ziwox信号补充"""
+def fetch_forex_rates_alpha_vantage():
+    """从Alpha Vantage获取实时汇率，使用Swissquote补充贵金属数据"""
     rates = {}
-
-    ziwox_price_map = {}
-    for signal in ziwox_signals:
-        pair = signal.get('pair')
-        price = signal.get('last_price')
-        if pair and price and price > 0:
-            ziwox_price_map[pair] = price
-
+    
+    # 通过Alpha Vantage获取的货币对（包括BTCUSD）
+    av_pairs = ['EURUSD', 'GBPUSD', 'USDCHF', 'USDCNH', 'USDJPY', 'AUDUSD', 'BTCUSD']
+    
     if config.alpha_vantage_key:
         try:
             logger.info("尝试从Alpha Vantage获取汇率...")
             fx = ForeignExchange(key=config.alpha_vantage_key)
-
-            # 只处理前5个主要品种，避免API限制
-            limited_pairs = config.watch_currency_pairs[:6]
-
-            for i, pair in enumerate(limited_pairs):
+            
+            for i, pair in enumerate(av_pairs):
                 try:
                     if i > 0:
                         delay = random.uniform(12, 15)
                         logger.info(f"  等待 {delay:.1f} 秒以避免API限制...")
                         time.sleep(delay)
-
+                    
                     if pair in config.av_special_pairs:
                         from_cur, to_cur = config.av_special_pairs[pair]
                     else:
                         from_cur = pair[:3]
                         to_cur = pair[3:]
-
+                    
                     data, _ = fx.get_currency_exchange_rate(
                         from_currency=from_cur,
                         to_currency=to_cur
                     )
-
+                    
                     if data and '5. Exchange Rate' in data:
                         rates[pair] = {
                             'rate': float(data['5. Exchange Rate']),
@@ -333,34 +335,23 @@ def fetch_forex_rates_alpha_vantage(ziwox_signals):
                         logger.info(f"    ✓ Alpha Vantage 成功获取 {pair}: {rates[pair]['rate']}")
                     else:
                         raise ValueError(f"No rate returned for {pair}")
-
+                    
                 except Exception as e:
                     logger.warning(f"    Alpha Vantage 获取 {pair} 失败: {str(e)[:100]}")
-                    if pair in ziwox_price_map:
-                        rates[pair] = {
-                            'rate': ziwox_price_map[pair],
-                            'bid': ziwox_price_map[pair] * 0.999,
-                            'ask': ziwox_price_map[pair] * 1.001,
-                            'last_refreshed': datetime.now().isoformat(),
-                            'source': 'Ziwox (补充)'
-                        }
-                        logger.info(f"    ↳ 已从Ziwox补充 {pair}: {rates[pair]['rate']}")
-
+                    
         except Exception as e:
             logger.error(f"Alpha Vantage API整体调用失败: {e}")
-
-    # 补充其他货币对的数据
+    
+    # 从Swissquote获取贵金属数据
+    logger.info("尝试从Swissquote获取贵金属数据...")
+    metal_rates = fetch_metal_rates_swissquote()
+    rates.update(metal_rates)
+    
+    # 检查是否所有监控的货币对都有数据
     for pair in config.watch_currency_pairs:
-        if pair not in rates and pair in ziwox_price_map:
-            rates[pair] = {
-                'rate': ziwox_price_map[pair],
-                'bid': ziwox_price_map[pair] * 0.999,
-                'ask': ziwox_price_map[pair] * 1.001,
-                'last_refreshed': datetime.now().isoformat(),
-                'source': 'Ziwox'
-            }
-            logger.info(f"    ↳ 使用Ziwox价格 {pair}: {rates[pair]['rate']}")
-
+        if pair not in rates:
+            logger.warning(f"    {pair} 没有获取到任何数据")
+    
     logger.info(f"汇率获取完成，共得到 {len(rates)} 个品种数据")
     return rates
 
@@ -839,18 +830,11 @@ def format_price(pair, price):
 
 def get_real_time_price_by_pair(pair, signals, rates):
     """获取特定货币对的实时价格"""
-    # 优先从rates获取
+    # 从rates获取
     if pair in rates:
         price = rates[pair].get('rate')
         if price and price > 0:
             return price
-    
-    # 从signals获取
-    for signal in signals:
-        if signal.get('pair') == pair:
-            price = signal.get('last_price')
-            if price and price > 0:
-                return price
     
     return None
 
@@ -1309,7 +1293,7 @@ def generate_currency_pairs_summary(signals, rates):
             price = rate_info.get('rate', 0)
             source = rate_info.get('source', '未知')
         else:
-            # 尝试从signals中获取价格
+            # 尝试从signals中获取价格 (已弃用，保留结构)
             signal = next((s for s in signals if s.get('pair') == pair), None)
             if signal:
                 price = signal.get('last_price', 0)
@@ -1349,17 +1333,16 @@ def execute_data_update(generate_ai=False):
         logger.info(f"开始执行数据更新: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         logger.info(f"生成AI分析: {'是' if generate_ai else '否'}")
 
-        # 1. 获取市场信号数据
-        logger.info("阶段1/4: 获取市场信号...")
-        signals = fetch_market_signals_ziwox()
+        # 1. 获取市场信号数据 (已弃用，返回空列表)
+        logger.info("阶段1/4: 获取市场信号 (已弃用)...")
+        signals = fetch_market_signals_ziwox()  # 现在返回空列表
         
-        # 2. 获取实时汇率数据
+        # 2. 获取实时汇率数据 (Alpha Vantage + Swissquote)
         logger.info("阶段2/4: 获取实时汇率...")
-        rates = fetch_forex_rates_alpha_vantage(signals)
+        rates = fetch_forex_rates_alpha_vantage()
 
-        # 3. 获取财经日历数据 - 关键修复：无论是否生成AI分析，都要为事件生成AI分析
+        # 3. 获取财经日历数据
         logger.info("阶段3/4: 获取财经日历...")
-        # 在AI分析更新时，为事件生成AI分析
         events = fetch_economic_calendar(signals, rates, generate_event_ai=generate_ai)
 
         # 4. 生成综合AI分析（分章节）- 只在需要时生成
@@ -1399,7 +1382,7 @@ def execute_data_update(generate_ai=False):
 
         logger.info(f"数据更新成功完成:")
         logger.info(f"  - 生成AI分析: {'是' if generate_ai else '否'}")
-        logger.info(f"  - 市场信号: {len(signals)} 个")
+        logger.info(f"  - 市场信号: {len(signals)} 个 (已弃用)")
         logger.info(f"  - 汇率数据: {len(rates)} 个")
         logger.info(f"  - 财经日历: {len(events)} 个")
         logger.info(f"  - 事件AI分析: {len([e for e in events if e.get('ai_analysis', '').startswith('【AI分析】') and '等待' not in e.get('ai_analysis', '')])} 个已生成")
@@ -1514,14 +1497,14 @@ def index():
     return jsonify({
         "status": "running",
         "service": "宏观经济AI分析工具（实时版）",
-        "version": "7.3",
+        "version": "7.4",
         "data_sources": {
-            "market_signals": "Ziwox",
-            "forex_rates": "Alpha Vantage + Ziwox补充",
+            "market_signals": "已弃用",
+            "forex_rates": "Alpha Vantage + Swissquote (黄金/白银)",
             "economic_calendar": "Forex Factory JSON API + 网页抓取",
             "ai_analysis": "laozhang.ai（gpt-5.2模型）"
         },
-        "special_pairs": ["XAU/USD (黄金)", "XAG/USD (白银)", "BTC/USD (比特币)"],
+        "special_pairs": ["XAU/USD (黄金) - Swissquote", "XAG/USD (白银) - Swissquote", "BTC/USD (比特币) - Alpha Vantage"],
         "timezone": "北京时间 (UTC+8)",
         "ai_schedule": f"{', '.join([f'{h}:00' for h in config.ai_generate_hours_beijing])}",
         "ai_update_count": store.ai_update_count,
@@ -1695,11 +1678,11 @@ def get_market_signals():
         "status": "success",
         "data": signals,
         "count": len(signals),
-        "source": "Ziwox",
+        "source": "已弃用",
         "special_pairs": [
-            {"pair": "XAUUSD", "name": "黄金/美元", "type": "贵金属"},
-            {"pair": "XAGUSD", "name": "白银/美元", "type": "贵金属"},
-            {"pair": "BTCUSD", "name": "比特币/美元", "type": "加密货币"}
+            {"pair": "XAUUSD", "name": "黄金/美元", "type": "贵金属", "source": "Swissquote"},
+            {"pair": "XAGUSD", "name": "白银/美元", "type": "贵金属", "source": "Swissquote"},
+            {"pair": "BTCUSD", "name": "比特币/美元", "type": "加密货币", "source": "Alpha Vantage"}
         ]
     })
 
@@ -1818,10 +1801,11 @@ def debug_schedule():
 # ============================================================================
 if __name__ == '__main__':
     logger.info("="*60)
-    logger.info("启动宏观经济AI分析工具（实时数据版）v7.3")
+    logger.info("启动宏观经济AI分析工具（实时数据版）v7.4")
     logger.info(f"财经日历源: Forex Factory JSON API + 网页抓取")
     logger.info(f"AI分析服务: laozhang.ai（gpt-5.2模型）")
-    logger.info(f"特殊品种: XAU/USD (黄金), XAG/USD (白银), BTC/USD (比特币)")
+    logger.info(f"外汇数据源: Alpha Vantage (包括BTCUSD)")
+    logger.info(f"贵金属数据源: Swissquote Public API (黄金/白银)")
     logger.info(f"时区: 北京时间 (UTC+8)")
     logger.info(f"AI分析时间（北京时间）: {', '.join([f'{h}:00' for h in config.ai_generate_hours_beijing])}")
     logger.info(f"基础数据更新: 每30分钟（更新实时数据，不生成AI分析）")
@@ -1845,6 +1829,16 @@ if __name__ == '__main__':
             # 统计已有AI分析的事件
             events_with_ai = len([e for e in events if e.get('ai_analysis', '').startswith('【AI分析】') and '等待' not in e.get('ai_analysis', '')])
             logger.info(f"事件AI分析生成: {events_with_ai}/{len(events)} 个事件")
+            
+            # 显示各数据源获取情况
+            rates = store.forex_rates
+            for pair in config.watch_currency_pairs:
+                if pair in rates:
+                    source = rates[pair].get('source', '未知')
+                    rate = rates[pair].get('rate', 0)
+                    logger.info(f"  {pair}: {rate} ({source})")
+                else:
+                    logger.warning(f"  {pair}: 未获取到数据")
         else:
             logger.warning("初始数据获取失败，但服务已启动")
     except Exception as e:
