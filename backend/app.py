@@ -41,25 +41,25 @@ class Config:
         self.ziwox_api_key = os.getenv("ZIWOX_API_KEY", "B65991B99EB498AB")
         self.ziwox_api_url = "https://ziwox.com/terminal/services/API/V1/fulldata.php"
 
-        # Swissquote API 配置 (用于黄金和白银)
+        # Swissquote API 配置 (用于黄金、白银和其他货币对)
         self.swissquote_api_base = "https://forex-data-feed.swissquote.com/public-quotes/bboquotes/instrument"
         
         # 模式开关
         self.enable_ai = os.getenv("ENABLE_AI", "true").lower() == "true"
 
-        # 监控的货币对 - 修正版 (注意：BTCUSD现在也通过Alpha Vantage获取)
-        self.watch_currency_pairs = [
-            'EURUSD', 'GBPUSD', 'USDCHF', 'USDCNH',
-            'USDJPY', 'AUDUSD', 'XAUUSD', 'XAGUSD', 'BTCUSD'
-        ]
+        # 监控的货币对 - 更新版
+        # Alpha Vantage (5个核心货币对)
+        self.av_currency_pairs = ['BTCUSD', 'EURUSD', 'GBPUSD', 'USDJPY', 'USDCHF']
+        # Swissquote (黄金、白银和其他货币对)
+        self.sq_currency_pairs = ['XAUUSD', 'XAGUSD', 'USDCNH', 'AUDUSD', 'NZDUSD', 'USDCAD']
+        # 所有监控的货币对
+        self.watch_currency_pairs = self.av_currency_pairs + self.sq_currency_pairs
 
         # Ziwox需要小写参数 (已弃用)
         self.ziwox_pairs = [pair.lower() for pair in self.watch_currency_pairs]
 
-        # Alpha Vantage特殊品种映射 (保留，但BTCUSD现在会使用这个映射)
+        # Alpha Vantage特殊品种映射
         self.av_special_pairs = {
-            'XAUUSD': ('XAU', 'USD'),
-            'XAGUSD': ('XAG', 'USD'),
             'BTCUSD': ('BTC', 'USD')
         }
 
@@ -115,11 +115,11 @@ class Config:
             'china': ['USDCNH'],
             'pboc': ['USDCNH'],
             
-            # 新西兰相关事件 - 注意：我们没有NZDUSD，所以用替代
-            'NZD': ['AUDUSD'],  # 使用AUD作为替代
-            'kiwi': ['AUDUSD'],
-            'new zealand': ['AUDUSD'],
-            'nz': ['AUDUSD'],
+            # 新西兰相关事件 - 更新：现在使用NZDUSD
+            'NZD': ['NZDUSD'],
+            'kiwi': ['NZDUSD'],
+            'new zealand': ['NZDUSD'],
+            'nz': ['NZDUSD'],
             
             # 美国相关事件
             'USD': ['EURUSD', 'USDJPY'],  # 主要货币对
@@ -221,17 +221,26 @@ def fetch_market_signals_ziwox():
 # ============================================================================
 # 模块2：实时汇率获取 (Alpha Vantage + Swissquote)
 # ============================================================================
-def fetch_metal_rates_swissquote():
-    """从Swissquote API获取黄金和白银的实时汇率"""
-    metals = {}
+def fetch_rates_swissquote():
+    """从Swissquote API获取实时汇率（包括贵金属和其他货币对）"""
+    rates = {}
     
-    # 定义贵金属对和对应的API路径
-    metal_pairs = {
-        'XAUUSD': 'XAU/USD',
-        'XAGUSD': 'XAG/USD'
+    # 定义Swissquote支持的货币对和对应的API路径
+    sq_pairs_mapping = {
+        'XAUUSD': 'XAU/USD',       # 黄金
+        'XAGUSD': 'XAG/USD',       # 白银
+        'USDCNH': 'USD/CNH',       # 美元/人民币
+        'AUDUSD': 'AUD/USD',       # 澳元/美元
+        'NZDUSD': 'NZD/USD',       # 新西兰元/美元
+        'USDCAD': 'USD/CAD',       # 美元/加元
+        # 如果需要更多货币对，可以继续添加
+        # 'EURUSD': 'EUR/USD',     # 欧元/美元 (如果需要也可以从Swissquote获取)
+        # 'GBPUSD': 'GBP/USD',     # 英镑/美元
+        # 'USDJPY': 'USD/JPY',     # 美元/日元
+        # 'USDCHF': 'USD/CHF',     # 美元/瑞郎
     }
     
-    for pair, instrument in metal_pairs.items():
+    for pair, instrument in sq_pairs_mapping.items():
         try:
             url = f"{config.swissquote_api_base}/{instrument}"
             logger.info(f"正在从Swissquote获取 {pair} 价格...")
@@ -265,7 +274,7 @@ def fetch_metal_rates_swissquote():
                         if bid and ask:
                             rate = (bid + ask) / 2
                             
-                            metals[pair] = {
+                            rates[pair] = {
                                 'rate': rate,
                                 'bid': bid,
                                 'ask': ask,
@@ -291,19 +300,19 @@ def fetch_metal_rates_swissquote():
         # 避免请求过快
         time.sleep(0.5)
     
-    logger.info(f"Swissquote贵金属获取完成，共得到 {len(metals)} 个品种数据")
-    return metals
+    logger.info(f"Swissquote数据获取完成，共得到 {len(rates)} 个品种数据")
+    return rates
 
 def fetch_forex_rates_alpha_vantage():
-    """从Alpha Vantage获取实时汇率，使用Swissquote补充贵金属数据"""
+    """从Alpha Vantage获取实时汇率（只获取5个核心货币对）"""
     rates = {}
     
-    # 通过Alpha Vantage获取的货币对（包括BTCUSD）
-    av_pairs = ['EURUSD', 'GBPUSD', 'USDCHF', 'USDCNH', 'USDJPY', 'AUDUSD', 'BTCUSD']
+    # 只获取5个核心货币对
+    av_pairs = config.av_currency_pairs  # ['BTCUSD', 'EURUSD', 'GBPUSD', 'USDJPY', 'USDCHF']
     
     if config.alpha_vantage_key:
         try:
-            logger.info("尝试从Alpha Vantage获取汇率...")
+            logger.info("尝试从Alpha Vantage获取核心货币对汇率...")
             fx = ForeignExchange(key=config.alpha_vantage_key)
             
             for i, pair in enumerate(av_pairs):
@@ -342,10 +351,10 @@ def fetch_forex_rates_alpha_vantage():
         except Exception as e:
             logger.error(f"Alpha Vantage API整体调用失败: {e}")
     
-    # 从Swissquote获取贵金属数据
-    logger.info("尝试从Swissquote获取贵金属数据...")
-    metal_rates = fetch_metal_rates_swissquote()
-    rates.update(metal_rates)
+    # 从Swissquote获取其他货币对数据（包括黄金白银）
+    logger.info("尝试从Swissquote获取其他货币对数据...")
+    sq_rates = fetch_rates_swissquote()
+    rates.update(sq_rates)
     
     # 检查是否所有监控的货币对都有数据
     for pair in config.watch_currency_pairs:
@@ -353,6 +362,8 @@ def fetch_forex_rates_alpha_vantage():
             logger.warning(f"    {pair} 没有获取到任何数据")
     
     logger.info(f"汇率获取完成，共得到 {len(rates)} 个品种数据")
+    logger.info(f"Alpha Vantage获取: {[p for p in rates.keys() if rates[p].get('source') == 'Alpha Vantage']}")
+    logger.info(f"Swissquote获取: {[p for p in rates.keys() if rates[p].get('source') == 'Swissquote']}")
     return rates
 
 # ============================================================================
@@ -874,8 +885,9 @@ def get_event_related_pairs(event_name, currency_code):
         elif currency_code_upper == "BTC":
             related_pairs.add("BTCUSD")
         elif currency_code_upper == "NZD":
-            # 我们没有NZDUSD，使用最接近的AUDUSD
-            related_pairs.add("AUDUSD")
+            related_pairs.add("NZDUSD")  # 更新：现在使用NZDUSD
+        elif currency_code_upper == "CAD":
+            related_pairs.add("USDCAD")  # 添加：现在使用USDCAD
         elif currency_code_upper == "USD":
             # 美元相关事件，添加主要货币对
             related_pairs.add("EURUSD")
@@ -1270,7 +1282,7 @@ def generate_currency_pairs_summary(signals, rates):
     """生成货币对摘要信息，用于前端展示"""
     currency_pairs_summary = []
     
-    # 定义货币对显示名称和图标
+    # 定义货币对显示名称和图标 - 更新：添加NZDUSD和USDCAD
     pair_display_info = {
         'EURUSD': {'name': '欧元/美元', 'icon': '🇪🇺🇺🇸'},
         'GBPUSD': {'name': '英镑/美元', 'icon': '🇬🇧🇺🇸'},
@@ -1278,13 +1290,16 @@ def generate_currency_pairs_summary(signals, rates):
         'USDCHF': {'name': '美元/瑞郎', 'icon': '🇺🇸🇨🇭'},
         'USDCNH': {'name': '美元/人民币', 'icon': '🇺🇸🇨🇳'},
         'AUDUSD': {'name': '澳元/美元', 'icon': '🇦🇺🇺🇸'},
+        'NZDUSD': {'name': '纽元/美元', 'icon': '🇳🇿🇺🇸'},
+        'USDCAD': {'name': '美元/加元', 'icon': '🇺🇸🇨🇦'},
         'XAUUSD': {'name': '黄金/美元', 'icon': '🥇'},
         'XAGUSD': {'name': '白银/美元', 'icon': '🥈'},
         'BTCUSD': {'name': '比特币/美元', 'icon': '₿'}
     }
     
-    # 按优先级排序
-    priority_order = ['XAUUSD', 'XAGUSD', 'BTCUSD', 'EURUSD', 'GBPUSD', 'USDJPY', 'USDCHF', 'USDCNH', 'AUDUSD']
+    # 按优先级排序 - 更新：添加NZDUSD和USDCAD
+    priority_order = ['XAUUSD', 'XAGUSD', 'BTCUSD', 'EURUSD', 'GBPUSD', 'USDJPY', 'USDCHF', 
+                     'USDCNH', 'AUDUSD', 'NZDUSD', 'USDCAD']
     
     for pair in priority_order:
         # 从rates中获取价格
@@ -1337,7 +1352,7 @@ def execute_data_update(generate_ai=False):
         logger.info("阶段1/4: 获取市场信号 (已弃用)...")
         signals = fetch_market_signals_ziwox()  # 现在返回空列表
         
-        # 2. 获取实时汇率数据 (Alpha Vantage + Swissquote)
+        # 2. 获取实时汇率数据 (Alpha Vantage 5个核心货币对 + Swissquote其他货币对)
         logger.info("阶段2/4: 获取实时汇率...")
         rates = fetch_forex_rates_alpha_vantage()
 
@@ -1443,7 +1458,7 @@ def scheduled_ai_analysis_update():
     
     logger.info("="*40)
     logger.info("定时任务触发AI分析更新（生成AI分析）")
-    logger.info("更新时间: " + datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
+    logger.info("更新时间: " + datetime.now().strftime('%Y-%m-d %H:%M:%S'))
     
     success = execute_data_update(generate_ai=True)  # 明确生成AI
     if not success:
@@ -1497,14 +1512,19 @@ def index():
     return jsonify({
         "status": "running",
         "service": "宏观经济AI分析工具（实时版）",
-        "version": "7.4",
+        "version": "7.5",
         "data_sources": {
             "market_signals": "已弃用",
-            "forex_rates": "Alpha Vantage + Swissquote (黄金/白银)",
+            "alpha_vantage": "BTCUSD, EURUSD, GBPUSD, USDJPY, USDCHF (5个核心货币对)",
+            "swissquote": "XAUUSD, XAGUSD, USDCNH, AUDUSD, NZDUSD, USDCAD (黄金白银及其他货币对)",
             "economic_calendar": "Forex Factory JSON API + 网页抓取",
             "ai_analysis": "laozhang.ai（gpt-5.2模型）"
         },
-        "special_pairs": ["XAU/USD (黄金) - Swissquote", "XAG/USD (白银) - Swissquote", "BTC/USD (比特币) - Alpha Vantage"],
+        "currency_pairs": {
+            "total": len(config.watch_currency_pairs),
+            "alpha_vantage": config.av_currency_pairs,
+            "swissquote": config.sq_currency_pairs
+        },
         "timezone": "北京时间 (UTC+8)",
         "ai_schedule": f"{', '.join([f'{h}:00' for h in config.ai_generate_hours_beijing])}",
         "ai_update_count": store.ai_update_count,
@@ -1548,6 +1568,11 @@ def get_api_status():
                 "forex_rates": len(store.forex_rates),
                 "economic_events": len(store.economic_events)
             }
+        },
+        "currency_pairs_summary": {
+            "total": len(config.watch_currency_pairs),
+            "alpha_vantage": config.av_currency_pairs,
+            "swissquote": config.sq_currency_pairs
         }
     })
 
@@ -1801,11 +1826,11 @@ def debug_schedule():
 # ============================================================================
 if __name__ == '__main__':
     logger.info("="*60)
-    logger.info("启动宏观经济AI分析工具（实时数据版）v7.4")
+    logger.info("启动宏观经济AI分析工具（实时数据版）v7.5")
     logger.info(f"财经日历源: Forex Factory JSON API + 网页抓取")
     logger.info(f"AI分析服务: laozhang.ai（gpt-5.2模型）")
-    logger.info(f"外汇数据源: Alpha Vantage (包括BTCUSD)")
-    logger.info(f"贵金属数据源: Swissquote Public API (黄金/白银)")
+    logger.info(f"Alpha Vantage数据源: {config.av_currency_pairs} (5个核心货币对)")
+    logger.info(f"Swissquote数据源: {config.sq_currency_pairs} (黄金白银及其他货币对)")
     logger.info(f"时区: 北京时间 (UTC+8)")
     logger.info(f"AI分析时间（北京时间）: {', '.join([f'{h}:00' for h in config.ai_generate_hours_beijing])}")
     logger.info(f"基础数据更新: 每30分钟（更新实时数据，不生成AI分析）")
