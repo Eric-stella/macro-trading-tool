@@ -403,7 +403,7 @@ def fetch_forex_rates_alpha_vantage():
                         'bid': btc_price * 0.999,
                         'ask': btc_price * 1.001,
                         'last_refreshed': datetime.now().isoformat(),
-                        'source': 'CoinGecko (备用)'
+                        'source': 'CoinGecko'
                     }
                     logger.info(f"    ✓ CoinGecko 成功获取 BTCUSD: {btc_price}")
         except Exception as e:
