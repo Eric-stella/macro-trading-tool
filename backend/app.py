@@ -48,12 +48,19 @@ class Config:
         self.enable_ai = os.getenv("ENABLE_AI", "true").lower() == "true"
 
         # 监控的货币对 - 更新版
-        # Alpha Vantage (5个核心货币对，但BTCUSD需要特殊处理)
-        self.av_currency_pairs = ['BTCUSD', 'EURUSD', 'GBPUSD', 'USDJPY', 'USDCHF']
-        # Swissquote (黄金、白银和其他货币对)
-        self.sq_currency_pairs = ['XAUUSD', 'XAGUSD', 'USDCNH', 'AUDUSD', 'NZDUSD', 'USDCAD']
+        # 所有可通过 Swissquote 获取的货币对
+        self.all_currency_pairs = ['EURUSD', 'GBPUSD', 'USDJPY', 'USDCHF', 'AUDUSD', 
+                                   'USDCAD', 'NZDUSD', 'USDCNH', 'XAUUSD', 'XAGUSD', 'BTCUSD']
+        
+        # Alpha Vantage 尝试获取的货币对（如果失败则回退到 Swissquote）
+        self.av_currency_pairs = ['EURUSD', 'GBPUSD', 'USDJPY', 'USDCHF', 'BTCUSD']
+        
+        # Swissquote 原生支持的货币对（包括 Alpha Vantage 失败的备选）
+        self.sq_currency_pairs = ['XAUUSD', 'XAGUSD', 'USDCNH', 'AUDUSD', 'NZDUSD', 'USDCAD',
+                                  'EURUSD', 'GBPUSD', 'USDJPY', 'USDCHF']  # 添加这些作为备选
+
         # 所有监控的货币对
-        self.watch_currency_pairs = self.av_currency_pairs + self.sq_currency_pairs
+        self.watch_currency_pairs = self.all_currency_pairs
 
         # Ziwox需要小写参数 (已弃用)
         self.ziwox_pairs = [pair.lower() for pair in self.watch_currency_pairs]
@@ -222,10 +229,10 @@ def fetch_market_signals_ziwox():
 # 模块2：实时汇率获取 (Alpha Vantage + Swissquote)
 # ============================================================================
 def fetch_rates_swissquote():
-    """从Swissquote API获取实时汇率（包括贵金属和其他货币对）"""
+    """从Swissquote API获取实时汇率（包括所有货币对）"""
     rates = {}
     
-    # 定义Swissquote支持的货币对和对应的API路径
+    # 定义Swissquote支持的所有货币对和对应的API路径
     sq_pairs_mapping = {
         'XAUUSD': 'XAU/USD',       # 黄金
         'XAGUSD': 'XAG/USD',       # 白银
@@ -233,7 +240,10 @@ def fetch_rates_swissquote():
         'AUDUSD': 'AUD/USD',       # 澳元/美元
         'NZDUSD': 'NZD/USD',       # 新西兰元/美元
         'USDCAD': 'USD/CAD',       # 美元/加元
-        # 如果需要更多货币对，可以继续添加
+        'EURUSD': 'EUR/USD',       # 欧元/美元
+        'GBPUSD': 'GBP/USD',       # 英镑/美元
+        'USDJPY': 'USD/JPY',       # 美元/日元
+        'USDCHF': 'USD/CHF',       # 美元/瑞郎
     }
     
     for pair, instrument in sq_pairs_mapping.items():
@@ -299,95 +309,107 @@ def fetch_rates_swissquote():
     logger.info(f"Swissquote数据获取完成，共得到 {len(rates)} 个品种数据")
     return rates
 
+def fetch_single_rate_alpha_vantage(pair):
+    """尝试从Alpha Vantage获取单个货币对汇率，失败时返回None"""
+    try:
+        if config.alpha_vantage_key:
+            fx = ForeignExchange(key=config.alpha_vantage_key)
+            
+            # 特殊处理BTCUSD
+            if pair == 'BTCUSD':
+                try:
+                    logger.info(f"    特殊处理BTCUSD...")
+                    url = f"https://www.alphavantage.co/query?function=CURRENCY_EXCHANGE_RATE&from_currency=BTC&to_currency=USD&apikey={config.alpha_vantage_key}"
+                    response = requests.get(url, timeout=15)
+                    
+                    if response.status_code == 200:
+                        data = response.json()
+                        if 'Realtime Currency Exchange Rate' in data:
+                            rate_data = data['Realtime Currency Exchange Rate']
+                            return {
+                                'rate': float(rate_data.get('5. Exchange Rate', 0)),
+                                'bid': rate_data.get('8. Bid Price', rate_data.get('5. Exchange Rate')),
+                                'ask': rate_data.get('9. Ask Price', rate_data.get('5. Exchange Rate')),
+                                'last_refreshed': rate_data.get('6. Last Refreshed', datetime.now().isoformat()),
+                                'source': 'Alpha Vantage (Digital Currency)'
+                            }
+                except Exception as btc_error:
+                    logger.warning(f"    Alpha Vantage BTCUSD 特殊处理失败: {str(btc_error)[:100]}")
+                    return None
+            
+            # 标准外汇货币对处理
+            if pair in config.av_special_pairs:
+                from_cur, to_cur = config.av_special_pairs[pair]
+            else:
+                from_cur = pair[:3]
+                to_cur = pair[3:]
+            
+            data, _ = fx.get_currency_exchange_rate(
+                from_currency=from_cur,
+                to_currency=to_cur
+            )
+            
+            if data and '5. Exchange Rate' in data:
+                return {
+                    'rate': float(data['5. Exchange Rate']),
+                    'bid': data.get('8. Bid Price', data['5. Exchange Rate']),
+                    'ask': data.get('9. Ask Price', data['5. Exchange Rate']),
+                    'last_refreshed': data.get('6. Last Refreshed', datetime.now().isoformat()),
+                    'source': 'Alpha Vantage'
+                }
+    except Exception as e:
+        logger.warning(f"    Alpha Vantage 获取 {pair} 失败: {str(e)[:100]}")
+    
+    return None
+
 def fetch_forex_rates_alpha_vantage():
-    """从Alpha Vantage获取实时汇率（只获取5个核心货币对，BTCUSD特殊处理）"""
+    """从Alpha Vantage获取实时汇率，失败时自动回退到Swissquote"""
     rates = {}
+    av_failed_pairs = []
+    av_success_pairs = []
     
-    # 只获取5个核心货币对，但BTCUSD需要特殊处理
-    av_pairs = config.av_currency_pairs  # ['BTCUSD', 'EURUSD', 'GBPUSD', 'USDJPY', 'USDCHF']
-    
+    # 首先尝试从Alpha Vantage获取
     if config.alpha_vantage_key:
         try:
             logger.info("尝试从Alpha Vantage获取核心货币对汇率...")
-            fx = ForeignExchange(key=config.alpha_vantage_key)
             
-            for i, pair in enumerate(av_pairs):
+            for i, pair in enumerate(config.av_currency_pairs):
                 try:
                     if i > 0:
                         delay = random.uniform(12, 15)
                         logger.info(f"  等待 {delay:.1f} 秒以避免API限制...")
                         time.sleep(delay)
                     
-                    # 特殊处理BTCUSD
-                    if pair == 'BTCUSD':
-                        # 尝试使用数字货币API端点
-                        try:
-                            logger.info(f"   特殊处理BTCUSD...")
-                            # Alpha Vantage的数字货币端点
-                            url = f"https://www.alphavantage.co/query?function=CURRENCY_EXCHANGE_RATE&from_currency=BTC&to_currency=USD&apikey={config.alpha_vantage_key}"
-                            response = requests.get(url, timeout=15)
-                            
-                            if response.status_code == 200:
-                                data = response.json()
-                                if 'Realtime Currency Exchange Rate' in data:
-                                    rate_data = data['Realtime Currency Exchange Rate']
-                                    
-                                    rates[pair] = {
-                                        'rate': float(rate_data.get('5. Exchange Rate', 0)),
-                                        'bid': rate_data.get('8. Bid Price', rate_data.get('5. Exchange Rate')),
-                                        'ask': rate_data.get('9. Ask Price', rate_data.get('5. Exchange Rate')),
-                                        'last_refreshed': rate_data.get('6. Last Refreshed', datetime.now().isoformat()),
-                                        'source': 'Alpha Vantage (Digital Currency)'
-                                    }
-                                    logger.info(f"    ✓ Alpha Vantage 成功获取 BTCUSD: {rates[pair]['rate']}")
-                                else:
-                                    logger.warning(f"    Alpha Vantage BTCUSD 返回数据格式异常: {data}")
-                            else:
-                                logger.warning(f"    Alpha Vantage BTCUSD 请求失败，状态码: {response.status_code}")
-                                
-                            # 无论成功与否，继续下一个货币对
-                            continue
-                                
-                        except Exception as btc_error:
-                            logger.warning(f"    Alpha Vantage BTCUSD 特殊处理失败: {str(btc_error)[:100]}")
-                            # 继续尝试使用标准外汇API
-                    
-                    # 标准外汇货币对处理
-                    if pair in config.av_special_pairs:
-                        from_cur, to_cur = config.av_special_pairs[pair]
+                    rate_data = fetch_single_rate_alpha_vantage(pair)
+                    if rate_data:
+                        rates[pair] = rate_data
+                        av_success_pairs.append(pair)
+                        logger.info(f"    ✓ Alpha Vantage 成功获取 {pair}: {rate_data['rate']}")
                     else:
-                        from_cur = pair[:3]
-                        to_cur = pair[3:]
-                    
-                    data, _ = fx.get_currency_exchange_rate(
-                        from_currency=from_cur,
-                        to_currency=to_cur
-                    )
-                    
-                    if data and '5. Exchange Rate' in data:
-                        rates[pair] = {
-                            'rate': float(data['5. Exchange Rate']),
-                            'bid': data.get('8. Bid Price', data['5. Exchange Rate']),
-                            'ask': data.get('9. Ask Price', data['5. Exchange Rate']),
-                            'last_refreshed': data.get('6. Last Refreshed', datetime.now().isoformat()),
-                            'source': 'Alpha Vantage'
-                        }
-                        logger.info(f"    ✓ Alpha Vantage 成功获取 {pair}: {rates[pair]['rate']}")
-                    else:
-                        raise ValueError(f"No rate returned for {pair}")
-                    
+                        av_failed_pairs.append(pair)
+                        logger.warning(f"    Alpha Vantage 获取 {pair} 失败，将尝试Swissquote")
+                        
                 except Exception as e:
-                    logger.warning(f"    Alpha Vantage 获取 {pair} 失败: {str(e)[:100]}")
+                    av_failed_pairs.append(pair)
+                    logger.warning(f"    Alpha Vantage 获取 {pair} 异常: {str(e)[:100]}")
                     
         except Exception as e:
             logger.error(f"Alpha Vantage API整体调用失败: {e}")
+            # 如果整体失败，将所有Alpha Vantage货币对标记为失败
+            av_failed_pairs = config.av_currency_pairs.copy()
     
-    # 从Swissquote获取其他货币对数据（包括黄金白银）
-    logger.info("尝试从Swissquote获取其他货币对数据...")
+    # 从Swissquote获取所有货币对数据（包括Alpha Vantage失败的备选）
+    logger.info("尝试从Swissquote获取货币对数据...")
     sq_rates = fetch_rates_swissquote()
-    rates.update(sq_rates)
     
-    # 如果BTCUSD仍然没有获取到，尝试备用方案
+    # 合并数据，优先使用Alpha Vantage成功的数据
+    for pair, rate_data in sq_rates.items():
+        # 如果Alpha Vantage已经成功获取了该货币对，跳过Swissquote的数据
+        if pair in av_success_pairs:
+            continue
+        rates[pair] = rate_data
+    
+    # 处理BTCUSD备用方案（如果Alpha Vantage和Swissquote都失败）
     if 'BTCUSD' not in rates or rates['BTCUSD'].get('rate', 0) == 0:
         logger.info("尝试备用方案获取BTCUSD价格...")
         try:
@@ -409,24 +431,21 @@ def fetch_forex_rates_alpha_vantage():
         except Exception as e:
             logger.warning(f"    备用方案获取BTCUSD失败: {str(e)}")
     
+    # 统计和日志
+    logger.info(f"汇率获取完成，共得到 {len(rates)} 个品种数据")
+    if av_success_pairs:
+        logger.info(f"Alpha Vantage成功获取: {av_success_pairs}")
+    if av_failed_pairs:
+        logger.info(f"Alpha Vantage失败，Swissquote备用获取: {av_failed_pairs}")
+    
     # 检查是否所有监控的货币对都有数据
+    missing_pairs = []
     for pair in config.watch_currency_pairs:
         if pair not in rates:
-            logger.warning(f"    {pair} 没有获取到任何数据")
+            missing_pairs.append(pair)
     
-    logger.info(f"汇率获取完成，共得到 {len(rates)} 个品种数据")
-    
-    # 记录每个货币对的数据源
-    av_pairs = [p for p in rates.keys() if rates[p].get('source', '').startswith('Alpha Vantage')]
-    sq_pairs = [p for p in rates.keys() if rates[p].get('source') == 'Swissquote']
-    other_pairs = [p for p in rates.keys() if p not in av_pairs + sq_pairs]
-    
-    if av_pairs:
-        logger.info(f"Alpha Vantage获取: {av_pairs}")
-    if sq_pairs:
-        logger.info(f"Swissquote获取: {sq_pairs}")
-    if other_pairs:
-        logger.info(f"其他来源获取: {other_pairs}")
+    if missing_pairs:
+        logger.warning(f"以下货币对没有获取到数据: {missing_pairs}")
     
     return rates
 
@@ -574,9 +593,9 @@ def parse_forex_factory_events(raw_events):
     # 2. 优先保证所有高重要性事件都能被展示
     selected_events = important_events
     
-    # 3. 从普通事件中补充，直到达到总数量上限（例如100条），确保时间覆盖
+    # 3. 从普通事件中补充，直到达到总数量上限（例如200条），确保时间覆盖
     # 计算剩余名额
-    remaining_slots = 100 - len(selected_events)
+    remaining_slots = 200 - len(selected_events)
     if remaining_slots > 0 and other_events:
         # 可以按顺序取，也可以随机取样，这里按顺序取以保持时间连续性
         selected_events.extend(other_events[:remaining_slots])
@@ -1099,7 +1118,7 @@ def generate_ai_analysis_for_event(event, signals=None, rates=None):
     return "【AI分析】分析生成中..."
 
 def add_ai_analysis_to_events(events, signals=None, rates=None):
-    """为事件添加AI分析"""
+    """为事件添加AI分析 - 修复版：支持整周事件"""
     if not events or not config.enable_ai:
         return events
     
@@ -1110,12 +1129,17 @@ def add_ai_analysis_to_events(events, signals=None, rates=None):
     
     logger.info(f"筛选出 {len(important_events)} 个重要事件需要生成AI分析")
     
-    # 限制最多为10个重要事件生成AI分析，避免API调用过多
-    important_events = important_events[:10]
+    # 修复：增加AI分析的事件数量限制到30个，以覆盖整周事件
+    # 优先选择最近的事件
+    important_events_sorted = sorted(important_events, 
+                                    key=lambda x: (x.get('date', ''), x.get('time', '')))
+    important_events_limited = important_events_sorted[:30]
     
-    for i, event in enumerate(important_events):
+    logger.info(f"将为 {len(important_events_limited)} 个重要事件生成AI分析（按时间排序）")
+    
+    for i, event in enumerate(important_events_limited):
         try:
-            logger.info(f"为事件 {i+1}/{len(important_events)} 生成AI分析: {event.get('name', '未知事件')}")
+            logger.info(f"为事件 {i+1}/{len(important_events_limited)} 生成AI分析: {event.get('name', '未知事件')} [{event.get('date')} {event.get('time')}]")
             ai_analysis = generate_ai_analysis_for_event(event, signals, rates)
             event['ai_analysis'] = ai_analysis
             
@@ -1126,8 +1150,8 @@ def add_ai_analysis_to_events(events, signals=None, rates=None):
                 logger.info(f"事件AI分析已存储: {event_id[:20]}...")
             
             # 增加延迟，避免API调用过于频繁
-            if i < len(important_events) - 1:
-                time.sleep(1.5)  # 增加到1.5秒延迟
+            if i < len(important_events_limited) - 1:
+                time.sleep(1.2)  # 调整延迟时间
                 
         except Exception as e:
             logger.error(f"为事件生成AI分析失败: {e}")
@@ -1140,7 +1164,13 @@ def add_ai_analysis_to_events(events, signals=None, rates=None):
             event['ai_analysis'] = "【AI分析】该事件重要性较低，暂无详细分析。关注市场整体情绪和主要货币对走势。"
             other_events_count += 1
     
-    logger.info(f"事件AI分析生成完成: {len(important_events)} 个重要事件已生成，{other_events_count} 个其他事件使用默认分析")
+    logger.info(f"事件AI分析生成完成: {len(important_events_limited)} 个重要事件已生成，{other_events_count} 个其他事件使用默认分析")
+    
+    # 修复：确保所有事件都有AI分析字段
+    for event in events:
+        if 'ai_analysis' not in event:
+            event['ai_analysis'] = "【AI分析】等待AI分析生成..."
+    
     return events
 
 # ============================================================================
@@ -1185,9 +1215,13 @@ def generate_comprehensive_analysis_with_sections(signals, rates, events):
                 formatted_price = format_price(pair, price)
                 price_info_lines.append(f"- {pair}: {formatted_price}")
         
-        # 重要事件统计
+        # 重要事件统计 - 修复：显示本周所有重要事件
         important_events = [e for e in events if e.get('importance', 1) >= 2]
-        event_names = [e.get('name', '') for e in important_events[:5]]
+        # 按时间排序，显示最近的重要事件
+        important_events_sorted = sorted(important_events, 
+                                        key=lambda x: (x.get('date', ''), x.get('time', '')))
+        event_names = [f"{e.get('date')} {e.get('time')} - {e.get('name', '')}" 
+                      for e in important_events_sorted[:10]]  # 显示前10个
         
         # 构建强化的提示词，明确要求四个章节
         prompt = f"""你是一位专业的宏观外汇策略分析师。请基于以下实时数据，生成一份结构化的今日外汇市场分析报告。
@@ -1598,19 +1632,19 @@ def index():
     return jsonify({
         "status": "running",
         "service": "宏观经济AI分析工具（实时版）",
-        "version": "7.6",
+        "version": "7.7",
         "data_sources": {
             "market_signals": "已弃用",
             "alpha_vantage": "BTCUSD, EURUSD, GBPUSD, USDJPY, USDCHF (5个核心货币对)",
-            "swissquote": "XAUUSD, XAGUSD, USDCNH, AUDUSD, NZDUSD, USDCAD (黄金白银及其他货币对)",
+            "swissquote": "所有货币对（Alpha Vantage失败时自动回退）",
             "economic_calendar": "Forex Factory JSON API + 网页抓取",
             "ai_analysis": "laozhang.ai（gpt-5.2模型）"
         },
         "btc_backup": "CoinGecko API (BTCUSD备用)",
         "currency_pairs": {
             "total": len(config.watch_currency_pairs),
-            "alpha_vantage": config.av_currency_pairs,
-            "swissquote": config.sq_currency_pairs
+            "alpha_vantage_attempted": config.av_currency_pairs,
+            "swissquote_supported": config.sq_currency_pairs
         },
         "timezone": "北京时间 (UTC+8)",
         "ai_schedule": f"{', '.join([f'{h}:00' for h in config.ai_generate_hours_beijing])}",
@@ -1621,6 +1655,11 @@ def index():
             "last_ai_generated": store.last_ai_generated.isoformat() if store.last_ai_generated else None,
             "last_data_update": store.last_data_update.isoformat() if store.last_data_update else None,
             "last_error": store.last_update_error
+        },
+        "features": {
+            "alpha_vantage_fallback": "已启用（失败时自动使用Swissquote）",
+            "full_week_events": "已启用（支持整周事件AI分析）",
+            "event_ai_limit": "30个重要事件"
         }
     })
 
@@ -1660,6 +1699,10 @@ def get_api_status():
             "total": len(config.watch_currency_pairs),
             "alpha_vantage": config.av_currency_pairs,
             "swissquote": config.sq_currency_pairs
+        },
+        "features": {
+            "alpha_vantage_fallback": "已启用",
+            "full_week_events_ai": "已启用"
         }
     })
 
@@ -1715,6 +1758,15 @@ def get_today_events():
     # 统计已有AI分析的事件
     ai_analysis_available = len([e for e in events if e.get('ai_analysis', '').startswith('【AI分析】') and '等待' not in e.get('ai_analysis', '')])
     
+    # 按日期分组统计
+    date_groups = {}
+    for event in events:
+        date = event.get('date')
+        if date:
+            if date not in date_groups:
+                date_groups[date] = 0
+            date_groups[date] += 1
+    
     return jsonify({
         "status": "success",
         "data": events,
@@ -1733,6 +1785,7 @@ def get_today_events():
             "available": ai_analysis_available,
             "pending": total_events - ai_analysis_available
         },
+        "date_distribution": date_groups,
         "generated_at": datetime.now(timezone(timedelta(hours=8))).isoformat(),
         "timezone": "北京时间 (UTC+8)",
         "ai_schedule": f"{', '.join([f'{h}:00' for h in config.ai_generate_hours_beijing])}",
@@ -1840,6 +1893,17 @@ def get_overview():
     # 统计已有AI分析的事件
     events_with_ai = len([e for e in events if e.get('ai_analysis', '').startswith('【AI分析】') and '等待' not in e.get('ai_analysis', '')])
     
+    # 按日期统计事件
+    date_stats = {}
+    for event in events:
+        date = event.get('date')
+        if date:
+            if date not in date_stats:
+                date_stats[date] = {'total': 0, 'with_ai': 0}
+            date_stats[date]['total'] += 1
+            if event.get('ai_analysis', '').startswith('【AI分析】') and '等待' not in event.get('ai_analysis', ''):
+                date_stats[date]['with_ai'] += 1
+    
     return jsonify({
         "status": "success",
         "timestamp": datetime.now(timezone(timedelta(hours=8))).isoformat(),
@@ -1861,6 +1925,7 @@ def get_overview():
             "events_with_ai": events_with_ai,
             "events_total": len(events)
         },
+        "date_distribution": date_stats,
         "ai_status": {
             "enabled": config.enable_ai,
             "model": "gpt-5.2",
@@ -1905,6 +1970,10 @@ def debug_schedule():
             "is_updating": store.is_updating,
             "last_ai_generated": store.last_ai_generated.isoformat() if store.last_ai_generated else None,
             "last_data_update": store.last_data_update.isoformat() if store.last_data_update else None
+        },
+        "features": {
+            "alpha_vantage_fallback": "已启用",
+            "full_week_events_ai": "已启用（最多30个重要事件）"
         }
     })
 
@@ -1913,17 +1982,17 @@ def debug_schedule():
 # ============================================================================
 if __name__ == '__main__':
     logger.info("="*60)
-    logger.info("启动宏观经济AI分析工具（实时数据版）v7.6")
+    logger.info("启动宏观经济AI分析工具（实时数据版）v7.7")
     logger.info(f"财经日历源: Forex Factory JSON API + 网页抓取")
     logger.info(f"AI分析服务: laozhang.ai（gpt-5.2模型）")
-    logger.info(f"Alpha Vantage数据源: {config.av_currency_pairs} (5个核心货币对)")
-    logger.info(f"Swissquote数据源: {config.sq_currency_pairs} (黄金白银及其他货币对)")
+    logger.info(f"Alpha Vantage数据源: {config.av_currency_pairs} (尝试获取)")
+    logger.info(f"Swissquote数据源: {config.sq_currency_pairs} (Alpha Vantage失败时自动回退)")
     logger.info(f"比特币备用数据源: CoinGecko API")
     logger.info(f"时区: 北京时间 (UTC+8)")
     logger.info(f"AI分析时间（北京时间）: {', '.join([f'{h}:00' for h in config.ai_generate_hours_beijing])}")
     logger.info(f"基础数据更新: 每30分钟（更新实时数据，不生成AI分析）")
-    logger.info(f"事件AI分析: 与综合AI分析同时生成（每天4次）")
-    logger.info(f"手动刷新: 只更新数据，不生成AI分析")
+    logger.info(f"事件AI分析: 与综合AI分析同时生成（每天4次，最多30个重要事件）")
+    logger.info(f"Alpha Vantage回退机制: 已启用（失败时自动使用Swissquote）")
     logger.info("="*60)
 
     # 首次启动时获取数据（生成AI分析）
@@ -1942,6 +2011,18 @@ if __name__ == '__main__':
             # 统计已有AI分析的事件
             events_with_ai = len([e for e in events if e.get('ai_analysis', '').startswith('【AI分析】') and '等待' not in e.get('ai_analysis', '')])
             logger.info(f"事件AI分析生成: {events_with_ai}/{len(events)} 个事件")
+            
+            # 按日期统计事件分布
+            date_stats = {}
+            for event in events:
+                date = event.get('date')
+                if date:
+                    if date not in date_stats:
+                        date_stats[date] = 0
+                    date_stats[date] += 1
+            
+            for date, count in sorted(date_stats.items()):
+                logger.info(f"  {date}: {count} 个事件")
             
             # 显示各数据源获取情况
             rates = store.forex_rates
